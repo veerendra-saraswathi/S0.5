@@ -1,6 +1,7 @@
 """Lake helpers. Tests stub DuckDB and the Parquet writer. No Postgres."""
 
 import atexit
+from pathlib import Path
 
 import duckdb
 import pytest
@@ -216,14 +217,19 @@ def test_query_recent_escapes_a_quote_in_the_lake_path(monkeypatch, tmp_path):
     assert raw not in sql
 
 
-def test_failed_flush_keeps_rows_for_retry(monkeypatch):
-    rows = [{"value": 1}]
+def test_failed_flush_keeps_rows_for_retry(monkeypatch, tmp_path):
+    lake = tmp_path / "lake"
+    lake.touch()
+    rows = [{"value": 1}, {"value": 2}]
+    monkeypatch.setattr(historical, "LAKE_ROOT", lake)
     monkeypatch.setattr(historical, "_pending", rows.copy())
 
-    def fail_write(records):
-        raise OSError("disk full")
-
-    monkeypatch.setattr(historical, "append_telemetry", fail_write)
-    with pytest.raises(OSError, match="disk full"):
+    with pytest.raises(NotADirectoryError):
         historical.flush_telemetry()
     assert historical._pending == rows
+
+    lake.unlink()
+    part = historical.flush_telemetry()
+    assert historical.pl.read_parquet(part).select("value").to_dicts() == rows
+    assert historical.flush_telemetry() is None
+    assert list(lake.rglob("*.parquet")) == [Path(part)]

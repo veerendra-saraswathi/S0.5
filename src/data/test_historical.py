@@ -233,3 +233,17 @@ def test_failed_flush_keeps_rows_for_retry(monkeypatch, tmp_path):
     assert historical.pl.read_parquet(part).select("value").to_dicts() == rows
     assert historical.flush_telemetry() is None
     assert list(lake.rglob("*.parquet")) == [Path(part)]
+
+
+def test_partial_write_never_becomes_visible(monkeypatch, tmp_path):
+    monkeypatch.setattr(historical, "LAKE_ROOT", tmp_path)
+
+    def interrupted_write(frame, path):
+        Path(path).write_bytes(b"partial")
+        assert not list(tmp_path.rglob("*.parquet"))
+        raise OSError("write interrupted")
+
+    monkeypatch.setattr(historical.pl.DataFrame, "write_parquet", interrupted_write)
+    with pytest.raises(OSError, match="write interrupted"):
+        historical.append_telemetry([{"value": 1}])
+    assert not any(path.is_file() for path in tmp_path.rglob("*"))

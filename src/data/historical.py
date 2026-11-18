@@ -4,6 +4,7 @@ import threading
 import polars as pl
 from datetime import datetime, timezone
 from pathlib import Path
+from uuid import uuid4
 
 LAKE_ROOT = Path("data/lake")
 
@@ -25,9 +26,14 @@ def append_telemetry(records: list[dict]) -> str | None:
     out_dir = LAKE_ROOT / "telemetry" / f"date={today}"
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    fname = out_dir / f"part-{datetime.now(timezone.utc).strftime('%H%M%S%f')}.parquet"
-    df.write_parquet(fname)
-    return str(fname)
+    final = out_dir / f"part-{uuid4().hex}.parquet"
+    pending = final.with_suffix(".tmp")
+    try:
+        df.write_parquet(pending)
+        pending.replace(final)
+    finally:
+        pending.unlink(missing_ok=True)
+    return str(final)
 
 
 def _cancel_flush_timer_locked() -> None:

@@ -1078,7 +1078,14 @@ async def abort_mission(mission_id: str):
 async def ws_cop(ws: WebSocket):
     await ws.accept()
     hub.loop = asyncio.get_running_loop()
-    queue = hub.subscribe()
+    client = getattr(ws, "client", None)
+    host = getattr(client, "host", "") if client is not None else ""
+    port = getattr(client, "port", "") if client is not None else ""
+    peer = f"{host}:{port}" if host else ""
+    queue = hub.claim(peer)
+    if queue is None:
+        await ws.close(code=1008)
+        return
     try:
         initial = await cop_frame(await platform.store.snapshot())
         initial["type"] = "snapshot"
@@ -1086,6 +1093,8 @@ async def ws_cop(ws: WebSocket):
         await ws.send_text(serialize_frame(initial))
         while True:
             frame = await queue.get()
+            if frame is None:
+                break
             if isinstance(frame, str):
                 await ws.send_text(frame)
             else:

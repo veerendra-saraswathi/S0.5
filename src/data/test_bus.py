@@ -210,7 +210,7 @@ def test_reconnecting_client_resumes_without_a_new_dial(monkeypatch):
         reset_bus()
 
 
-def test_issue_stays_pending_when_nats_is_unreachable(monkeypatch):
+def test_unreachable_nats_still_sends_the_command_locally(monkeypatch):
     monkeypatch.setenv("CNC_BUS", "nats")
     monkeypatch.setenv("CNC_NATS_URL", "nats://127.0.0.1:1")
     reset_bus()
@@ -236,9 +236,9 @@ def test_issue_stays_pending_when_nats_is_unreachable(monkeypatch):
                 issued_by="operator-1",
             )
             result = await platform.issue(cmd)
-            assert result.status == "pending"
-            assert result.result["queued"] is True
-            assert calls == []
+            assert result.status == "sent"
+            assert result.result["ack"] is True
+            assert calls == ["stop"]
             fresh = [
                 event for event in event_store.get_by_asset(adapter.id)
                 if event.event_id not in seen
@@ -251,6 +251,69 @@ def test_issue_stays_pending_when_nats_is_unreachable(monkeypatch):
             reset_bus()
 
     asyncio.run(body())
+
+
+def test_hold_timeout_writes_a_terminal_event(monkeypatch):
+    monkeypatch.setenv("CNC_BUS", "nats")
+    monkeypatch.setenv("CNC_ACK_TIMEOUT_S", "30")
+    monkeypatch.delenv("CNC_NATS_URL", raising=False)
+    reset_bus()
+    from src.data.outbox import get_relay, reset_relay
+    from src.operator_app.adapters.idempotency import reset_processed
+    from src.operator_app.adapters.telemetry_publish import PUBLISH_TIMEOUT_S
+    from src.data.bus import MessageBus, ack_timeout
+
+    reset_relay()
+    reset_processed()
+
+    async def refuse(self, subject, payload, msg_id=None, timeout=None):
+        return False
+
+    async def no_ack(self, command_id, timeout):
+        assert timeout == ack_timeout() + PUBLISH_TIMEOUT_S
+        return None
+
+    monkeypatch.setattr(MessageBus, "publish_jetstream", refuse)
+    monkeypatch.setattr(MessageBus, "wait_ack", no_ack)
+    relay = get_relay()
+
+    async def accept(subject, payload, msg_id):
+        return True
+
+    relay.set_publisher(accept)
+    sim = create_demo_fleet()["ugv-01"]
+    adapter = SimAssetAdapter(sim)
+    platform = Platform()
+    platform.adapters[adapter.id] = adapter
+    asset_id = adapter.id
+    seen = {event.event_id for event in event_store.get_by_asset(asset_id)}
+
+    async def body():
+        cmd = Command(
+            asset_id=asset_id,
+            command_type=CommandType.HOLD,
+            issued_by="operator-1",
+        )
+        result = await platform.issue(cmd)
+        assert result.status == "failed"
+        assert "ack timeout" in (result.result or {}).get("error", "")
+        fresh = [
+            event for event in event_store.get_by_asset(asset_id)
+            if event.event_id not in seen
+        ]
+        failed = [event for event in fresh if event.message == "hold (failed)"]
+        assert len(failed) == 1
+        assert failed[0].actor == "operator-1"
+        assert failed[0].asset_id == asset_id
+        assert failed[0].payload["operator_id"] == "operator-1"
+        assert failed[0].timestamp is not None
+        assert any(event.message == "hold (pending)" for event in fresh)
+
+    try:
+        asyncio.run(body())
+    finally:
+        reset_relay()
+        reset_bus()
 
 
 def test_ack_timeout_records_an_alert():

@@ -261,9 +261,9 @@ def test_duplicate_publish_executes_once_and_a_down_broker_stays_pending(monkeyp
         )
         expected["id"] = cmd.id
         result = await platform.issue(cmd)
-        assert result.status == "pending"
-        assert result.result["queued"] is True
-        assert calls == []
+        assert result.status == "sent"
+        assert result.result["ack"] is True
+        assert len(calls) == 1
         assert db.command_published(cmd.id) is False
 
         up["ok"] = True

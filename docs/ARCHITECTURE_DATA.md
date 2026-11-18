@@ -9,6 +9,22 @@
 | **Scope** | Persistence, ingest, hot cache, audit. Not a new UI, not a new ontology. |
 | **Related** | `docs/ONTOLOGY.md`, `docs/ARCHITECTURE.md`, `docs/EOI_TRACE.md`, `docs/PHASE_12_MONTHS.md`, `src/kernel/ontology.py`, `AGENTS.md` |
 
+## Landed increment, 2026-10-14
+
+`STORAGE_BACKEND` is the durable switch (EOI 2.1 Data & Services). Unset means `duckdb`. There is no `CNC_DURABLE` variable.
+
+`DuckDBDurableStore.save_telemetry` follows that switch. `postgres` inserts the existing `telemetry` hypertable through `PostgresRepositories.telemetry.insert` and does not write a Parquet part. `duckdb` buffers records and calls `append_telemetry` once per 500 rows, 5 s after the last row, on process exit, or when `flush_telemetry` runs.
+
+`append_telemetry` still writes one Parquet file per call. `scripts/smoke_data.py` still uses that direct path. `query_recent` binds `platform_id` and `limit`. The Parquet path stays the lake constant.
+
+`export_for_drop` writes `data/lake/_markers/<table>-<range>.ok` after a successful injected write and returns that path, the row count, and the Parquet path. An empty list, a `None` write, or a raised error does not create the marker file.
+
+`drop_after_marker` calls an injected deleter only when that marker file exists and its text is a positive count, and it returns that count. A missing marker, an empty or non-positive marker, or a deleter that raises returns `None`.
+
+Still open: the daily schedule and the failure counter.
+
+The live `_telem_loop` does not call `ingest_telemetry`. Acceptance criteria 10.1–10.4 were not re-run for this note.
+
 ## Overview
 
 The year-1 kernel already has the right objects and the wrong number of stores. One operator snapshot is assembled from process memory, a SQLite file of JSON blobs, a DuckDB file, a Parquet directory, and a Redis cache that the map does not read. A restart drops commands, the audit tape, the fusion tracker, and the event ring. Telemetry from the live FastAPI loop is not the telemetry in DuckDB or Parquet.

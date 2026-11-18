@@ -18,6 +18,61 @@ def test_run_cmd_kills_a_hung_child():
     assert proc.returncode != 0
 
 
+def test_active_start_body_passes_without_a_fetch():
+    assert acceptance_run.mission_start_ok(
+        hold_acked=True,
+        hold_actor="operator:op-1",
+        hold_has_events=True,
+        mission_code=200,
+        start_code=200,
+        start_body={"status": "active", "started_at": "t"},
+        fetched=None,
+        mission_commands=[],
+        assigned=["uav-01"],
+        actor="operator:op-1",
+    )
+
+
+def test_timeout_passes_when_the_store_has_the_mission_commands():
+    assigned = ["uav-01", "uav-02", "ugv-01", "ugv-02"]
+    commands = [
+        {"asset_id": asset_id, "issued_by": "mission", "command_type": "goto"}
+        for asset_id in assigned
+    ]
+    assert acceptance_run.mission_start_ok(
+        hold_acked=True,
+        hold_actor="operator:op-1",
+        hold_has_events=True,
+        mission_code=200,
+        start_code=0,
+        start_body=None,
+        fetched={"status": "active", "started_at": "t"},
+        mission_commands=commands,
+        assigned=assigned,
+        actor="operator:op-1",
+    )
+
+
+def test_timeout_fails_without_a_mission_command():
+    assert not acceptance_run.mission_start_ok(
+        hold_acked=True,
+        hold_actor="operator:op-1",
+        hold_has_events=True,
+        mission_code=200,
+        start_code=0,
+        start_body=None,
+        fetched={"status": "active", "started_at": "t"},
+        mission_commands=[],
+        assigned=["uav-01", "ugv-01"],
+        actor="operator:op-1",
+    )
+
+
+def test_a_second_peer_fails_the_single_socket_check():
+    assert acceptance_run.socket_is_single(["127.0.0.1:1"])
+    assert not acceptance_run.socket_is_single(["127.0.0.1:1", "127.0.0.1:2"])
+
+
 def test_delta_merges_into_the_last_snapshot():
     latest = {
         "type": "snapshot",

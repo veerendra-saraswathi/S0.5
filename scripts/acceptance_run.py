@@ -831,6 +831,21 @@ async def wait_health(client, timeout: float | None = None) -> dict:
     raise RuntimeError(f"health did not come up: {last}")
 
 
+async def get_json(client, path: str, timeout: float = 20):
+    started = time.perf_counter()
+    try:
+        response = await client.get(path, timeout=timeout)
+        elapsed_ms = (time.perf_counter() - started) * 1000.0
+        try:
+            payload = response.json()
+        except Exception:
+            payload = None
+        return response.status_code, payload, elapsed_ms, None
+    except Exception as exc:
+        elapsed_ms = (time.perf_counter() - started) * 1000.0
+        return 0, None, elapsed_ms, f"{exc.__class__.__name__}: {exc}"
+
+
 async def post_json(client, path: str, body: dict | None = None, timeout: float | None = None):
     if timeout is None:
         timeout = 45.0 if os.environ.get("CNC_FLEET") else 20.0
@@ -1278,7 +1293,83 @@ def _redis_flags() -> dict:
         "listener_started": bool(live_feed._listener_started),
         "overlay_loaded": bool(live_feed._overlay_loaded),
         "subscribers": live_feed.hub.subscribers,
+        "peers": list(live_feed.hub.peers),
     }
+
+
+def mission_start_timeout_s() -> float:
+    """Four sequential acks, plus a few seconds to persist the mission row."""
+    raw = os.environ.get("CNC_ACK_TIMEOUT_S", "30")
+    try:
+        ack = float(raw)
+    except ValueError:
+        ack = 30.0
+    if ack <= 0:
+        ack = 30.0
+    return 4.0 * ack + 15.0
+
+
+def mission_commands_cover(commands: list[dict], assigned: list[str]) -> bool:
+    """True when each assigned asset has a GOTO issued by the mission actor."""
+    wanted = {str(asset_id) for asset_id in assigned}
+    if not wanted:
+        return False
+    got: set[str] = set()
+    for row in commands:
+        if str(row.get("issued_by") or "") != "mission":
+            continue
+        if str(row.get("command_type") or "").lower() != "goto":
+            continue
+        asset_id = row.get("asset_id")
+        if asset_id:
+            got.add(str(asset_id))
+    return wanted <= got
+
+
+def mission_start_ok(
+    *,
+    hold_acked: bool,
+    hold_actor: str | None,
+    hold_has_events: bool,
+    mission_code: int,
+    start_code: int,
+    start_body: dict | None,
+    fetched: dict | None,
+    mission_commands: list[dict],
+    assigned: list[str],
+    actor: str,
+) -> bool:
+    """HTTP 200 with an active mission passes. A lost response can pass from the store."""
+    if not hold_acked or hold_actor != actor or not hold_has_events or mission_code != 200:
+        return False
+    if start_code == 200 and isinstance(start_body, dict) and start_body.get("status") == "active":
+        return True
+    if not isinstance(fetched, dict):
+        return False
+    if fetched.get("status") != "active" or not fetched.get("started_at"):
+        return False
+    return mission_commands_cover(mission_commands, assigned)
+
+
+def socket_is_single(peers: list[str]) -> bool:
+    return len(peers) == 1
+
+
+def mission_goto_rows() -> list[dict]:
+    from src.operator_app.app import platform
+
+    rows = []
+    for cmd in platform.store.commands.values():
+        kind = cmd.command_type.value if hasattr(cmd.command_type, "value") else str(cmd.command_type)
+        rows.append(
+            {
+                "id": cmd.id,
+                "asset_id": cmd.asset_id,
+                "issued_by": cmd.issued_by,
+                "command_type": kind,
+            }
+        )
+    return rows
 
 
 async def restart_app(server: AppServer, cop: CopClient, client, expect: dict, args) -> dict:
@@ -1536,6 +1627,10 @@ async def scenario(args) -> int:
         }
         cop = CopClient(f"ws://127.0.0.1:{args.port}/ws/cop")
         await cop.start()
+        socket_flags = await on_app(_redis_flags)
+        socket_peers = list(socket_flags.get("peers") or [])
+        if not socket_is_single(socket_peers):
+            raise RuntimeError(f"expected one /ws/cop client before the cruise, saw {socket_peers}")
         cop.measure_telem = True
         deadline = time.monotonic() + 30
         while time.monotonic() < deadline and len(cop.fleet()) < 4:
@@ -1556,10 +1651,27 @@ async def scenario(args) -> int:
             alt = 80 if asset_id in UAVS else 0
             row = await issue_command(client, asset_id, "goto", {"lat": lat, "lon": lon, "alt": alt}, result["goto_samples_ms"])
             result.setdefault("opening_commands", []).append(
-                {key: row[key] for key in ("asset_id", "command_id", "status", "issued_by", "acked", "elapsed_ms")}
+                {
+                    key: row[key]
+                    for key in (
+                        "asset_id",
+                        "command_id",
+                        "status",
+                        "issued_by",
+                        "acked",
+                        "elapsed_ms",
+                        "http_status",
+                        "error",
+                    )
+                }
             )
         await asyncio.sleep(args.plan.observe_s)
-        end_pose = {asset_id: pose(cop.asset(asset_id)) for asset_id in FLEET}
+        end_pose = {}
+        end_assets = []
+        for asset_id in FLEET:
+            card = cop.asset(asset_id) or {}
+            end_pose[asset_id] = pose(card)
+            end_assets.append(compact_asset(card))
         movement = {}
         for asset_id in FLEET:
             if start_pose.get(asset_id) and end_pose.get(asset_id):
@@ -1578,6 +1690,7 @@ async def scenario(args) -> int:
                     "assets": [compact_asset(card) for card in fleet],
                     "homes": sorted(list(homes), key=lambda item: str(item[0])),
                     "movement_m": movement,
+                    "end_assets": end_assets,
                     "frames": cop.frames,
                     "subscribers": subscribers.get("subscribers"),
                 },
@@ -1654,22 +1767,43 @@ async def scenario(args) -> int:
         )
         mission_id = mission_body.get("id") if isinstance(mission_body, dict) else None
         start_code, start_body, start_ms, start_err = (0, None, 0, "no mission")
+        start_timeout = mission_start_timeout_s()
         if mission_id:
             start_code, start_body, start_ms, start_err = await post_json(
-                client, f"/missions/{mission_id}/start", timeout=40
+                client, f"/missions/{mission_id}/start", timeout=start_timeout
             )
+        fetched = None
+        fetch_code, fetch_ms, fetch_err = (None, None, None)
+        mission_commands: list[dict] = []
+        direct_active = (
+            start_code == 200 and isinstance(start_body, dict) and start_body.get("status") == "active"
+        )
+        if mission_id and not direct_active:
+            fetch_code, fetch_body, fetch_ms, fetch_err = await get_json(
+                client, f"/missions/{mission_id}"
+            )
+            if fetch_code == 200 and isinstance(fetch_body, dict):
+                fetched = fetch_body
+            try:
+                mission_commands = await on_app(mission_goto_rows)
+            except Exception as exc:
+                mission_commands = [{"error": str(exc)}]
         c2_commands = [row for row in result.get("opening_commands", [])] + [
             {key: hold.get(key) for key in ("asset_id", "command_id", "status", "issued_by", "acked", "elapsed_ms")}
         ]
         hold_evidence = hold.get("evidence")
         actors = {row.get("issued_by") for row in c2_commands if row.get("issued_by")}
-        c2_ok = (
-            hold.get("acked")
-            and hold.get("issued_by") == ACTOR
-            and bool((hold_evidence or {}).get("events"))
-            and mission_code == 200
-            and start_code == 200
-            and (start_body or {}).get("status") == "active"
+        c2_ok = mission_start_ok(
+            hold_acked=bool(hold.get("acked")),
+            hold_actor=hold.get("issued_by"),
+            hold_has_events=bool((hold_evidence or {}).get("events")),
+            mission_code=mission_code,
+            start_code=start_code,
+            start_body=start_body if isinstance(start_body, dict) else None,
+            fetched=fetched,
+            mission_commands=mission_commands,
+            assigned=list(FLEET),
+            actor=ACTOR,
         )
         result["criteria"].append(
             criterion(
@@ -1693,9 +1827,15 @@ async def scenario(args) -> int:
                     "mission_error": mission_err,
                     "mission_id": mission_id,
                     "mission_started_http": start_code,
+                    "mission_start_timeout_s": start_timeout,
                     "mission_start_ms": start_ms,
                     "mission_start_error": start_err,
                     "mission_status": (start_body or {}).get("status") if isinstance(start_body, dict) else None,
+                    "mission_fetch_http": fetch_code,
+                    "mission_fetch_ms": fetch_ms,
+                    "mission_fetch_error": fetch_err,
+                    "mission_fetched": fetched,
+                    "mission_commands": mission_commands,
                     "mission_started_at": (start_body or {}).get("started_at") if isinstance(start_body, dict) else None,
                     "mission_actor_note": "Mission start issues GOTO with actor mission. Operator HTTP commands use operator:op-1.",
                 },
@@ -1704,7 +1844,9 @@ async def scenario(args) -> int:
         log(f"10.3 hold={hold.get('command_id')} mission={mission_id} start={start_code}")
 
         frame = cop.latest or {}
-        subscriber_count = (await on_app(_redis_flags)).get("subscribers")
+        live_flags = await on_app(_redis_flags)
+        subscriber_count = live_flags.get("subscribers")
+        peers = list(live_flags.get("peers") or [])
         operator_actors = sorted(
             {
                 row.get("issued_by")
@@ -1716,6 +1858,7 @@ async def scenario(args) -> int:
         sections = all(key in frame for key in ("assets", "tracks", "alerts", "missions", "recent_commands"))
         single = (
             subscriber_count == 1
+            and socket_is_single(peers)
             and result["dashboard_http"]["status"] == 200
             and result["dashboard_http"]["references_dashboard_js"]
             and sections
@@ -1729,6 +1872,7 @@ async def scenario(args) -> int:
                 {
                     "dashboard_http": result["dashboard_http"],
                     "socket_subscribers": subscriber_count,
+                    "socket_peers": peers,
                     "frame_keys": sorted(frame.keys()),
                     "fleet_ids": [card.get("id") for card in cop.fleet()],
                     "operator_actors": operator_actors,

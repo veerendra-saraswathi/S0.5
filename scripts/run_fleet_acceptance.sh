@@ -34,7 +34,8 @@ extra=""
 if [[ $# -gt 0 ]]; then
   extra=$(printf '%q ' "$@")
 fi
-exec docker exec \
+docker_cmd=(
+docker exec \
   -e CNC_FLEET \
   -e CNC_BUS \
   -e CNC_NATS_URL \
@@ -50,3 +51,9 @@ exec docker exec \
   -w /work \
   cnc-fleet \
   bash -lc "source /opt/ros/humble/setup.bash && exec python3 /work/scripts/acceptance_run.py --report /work/docs/acceptance_m7.json ${extra}"
+)
+# A laptop sleep during mission start burns the HTTP budget and fails 10.3.
+if command -v caffeinate >/dev/null 2>&1; then
+  exec caffeinate -dims "${docker_cmd[@]}"
+fi
+exec "${docker_cmd[@]}"

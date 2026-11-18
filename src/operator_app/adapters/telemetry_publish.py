@@ -163,5 +163,5 @@ async def publish_command_ack(command: Command, ok: bool, reason: str = "") -> N
     }
     if bus.mode != "nats" and not bus.has_local(subject):
         return
-    if not await bus.publish_jetstream(subject, payload):
+    if not await bus.publish_jetstream(subject, payload, timeout=PUBLISH_TIMEOUT_S):
         await bus.deliver_local(subject, payload)

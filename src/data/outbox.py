@@ -15,6 +15,7 @@ from loguru import logger
 
 from src.data.bus import current_mode, get_bus
 from src.data.subjects import command_subject
+from src.operator_app.adapters.telemetry_publish import PUBLISH_TIMEOUT_S
 from src.data_services.ids import uuid7
 from src.data_services.outbox_record import utcnow
 from src.data_services.repositories import get_repositories
@@ -117,7 +118,9 @@ class OutboxRelay:
     async def _emit(self, subject: str, payload: dict, msg_id: str) -> bool:
         if self._publisher is not None:
             return bool(await self._publisher(subject, payload, msg_id))
-        return await get_bus().publish_jetstream(subject, payload, msg_id=msg_id)
+        return await get_bus().publish_jetstream(
+            subject, payload, msg_id=msg_id, timeout=PUBLISH_TIMEOUT_S
+        )
 
     async def _loop(self) -> None:
         delay = 0.2

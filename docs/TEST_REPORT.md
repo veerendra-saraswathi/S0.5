@@ -143,7 +143,7 @@ After this acceptance run, from the repository root on the default store paths:
 
 This section is a separate measurement. The sections above record the in-process sim run and are unchanged.
 
-`docs/acceptance_m7.json` is the M7.1 run below. The 13:20Z numbers are the previous record, kept here and in commit `63a89a6`.
+The "M7.1 result" numbers are the `f9b8b24` run (`2026-10-13T15:24:48Z` to `2026-10-13T16:27:54Z`). That JSON is in commit `f9b8b24`. The working-tree file `docs/acceptance_m7.json` is the 14 October 09:56Z follow-up recorded below. The 18:28Z run stays in its own section. The 13:20Z numbers stay in "Previous record" and in commit `63a89a6`.
 
 ### M7.1 result
 
@@ -231,6 +231,10 @@ Commit `ca0ad62` reports 92 passed. That collection is 80 test functions, 12 of 
 
 This tree adds seven tests: bounded in-flight telemetry publish, one coalesced publish-failure alert, a hung `docker` CLI that is killed at its deadline, delta merge into the last snapshot, the Gazebo sim-to-wall offset, the MAVLink `SYSTEM_TIME` offset, and a one-asset WebSocket delta. From the repository root, `CNC_DUCKDB_PATH=/tmp/cnc-it.duckdb CNC_SNAPSHOT_PATH=/tmp/cnc-it.db .venv/bin/python -m pytest -q -rs --tb=line`: 88 passed, 27 skipped, in 15.47 s. Exit code 0. That command does not start SITL or Gazebo.
 
+The 18:28Z follow-up adds four checks in `src/operator_app/test_acceptance_harness.py`. An active mission-start body passes. A start timeout passes when the stored mission is active and the store has one mission-actor GOTO for each assigned asset. A timeout with no mission command fails. A second socket peer fails the single-socket check. The same pytest command on that tree: 92 passed, 27 skipped, in 35.76 s. Exit code 0. The 27 skips are unchanged.
+
+The 09:56Z follow-up adds two checks. A HOLD that times out writes `hold (failed)` with the operator id, the asset id, and a timestamp, beside the existing `hold (pending)` row. A loopback `/ws/cop` peer replaces a published-port peer, and a second loopback peer does not join. The same pytest command, before this acceptance, with NATS, Redis, and Postgres down: 94 passed, 27 skipped, in 5.92 s. Exit code 0. The 27 skips are the same JetStream, Postgres, Redis, and integration-flag set.
+
 The same 27 skip. Twenty-five skip because Postgres on `127.0.0.1:5432` is down. The duckdb parameter of a shared test still passes.
 
 - `src/data/test_nats_pipeline.py`: `test_streams_use_the_architecture_retention`, `test_sim_telemetry_reaches_postgres_redis_and_fusion`, `test_goto_is_dispatched_acked_and_audited`, `test_missing_ack_raises_an_alert`, `test_invalid_mavlink_telemetry_lands_on_the_dlq`. The file is marked `nats`. The skip text is the Postgres `OperationalError`, because the JetStream check opens that database.
@@ -242,6 +246,118 @@ Skipped until the integration flag is set:
 
 - `src/operator_app/adapters/test_sitl.py`: `test_sitl_goto_hold_and_rtl_ack` — set `CNC_SITL=1` when ArduCopter SITL is sending MAVLink UDP.
 - `src/operator_app/adapters/test_ros2_integration.py`: `test_ros2_odom_and_goto_ack` — set `CNC_ROS2=1` when the Gazebo waypoint action is up.
+
+### Follow-up run, 18:28Z
+
+**When:** `2026-10-13T18:28:38Z` to `2026-10-13T18:48:38Z` (1199.9 s). `--quick` was not used. Cruise was 660 s.  
+**Tree the operator imported:** commit `f9b8b24`, dirty, 5 paths.  
+**Fleet:** `cnc-fleet`, `cnc-sitl-uav-01`, and `cnc-sitl-uav-02` were recreated before launch. At the odom check, ugv-01 was at (−0.03, −0.03) m and ugv-02 at (7.97, −0.03) m. One waypoint follower was running.
+
+The run completed and wrote `docs/acceptance_m7.json`. `harness_error` is null. Criterion 10.2 passed. Criteria 10.1, 10.3, and 10.4 failed. All four faults matched. `cnc-nats-1` and `cnc-redis` were running again at the end. `cnc-timescale-1` stayed exited.
+
+`scripts/run_fleet_acceptance.sh` held the host awake with `caffeinate -dims`. Forty-four docker-stats samples from `18:28:27Z` through `18:51:11Z` have no gap longer than 90 s.
+
+Opening GOTOs were issued one after another, then the observe window stayed 12 s. The 15 m bar is unchanged.
+
+| Vehicle | Ack | Elapsed | Metres | End `last_seen` |
+| --- | --- | --- | --- | --- |
+| uav-01 | false, status empty | 47.8 s | 0.3 | `18:32:33Z` |
+| uav-02 | true, status sent | 24.3 s | 237.4 | `18:32:33Z` |
+| ugv-01 | true, status sent | 6.4 s | 60.2 | `18:32:33Z` |
+| ugv-02 | true, status sent | 5.6 s | 43.8 | `18:32:33Z` |
+
+uav-01's end card is lat 17.385001, lon 78.4867011, alt 29.998, status mission. Its start card at `18:30:40Z` was lat 17.3849987, lon 78.4866989, alt 30.003. `last_seen` advanced to `18:32:33Z` while the coordinate stayed on the home point. uav-02's end altitude is 80.002 m. The 15 m and 12 s bars stay as they are.
+
+10.3: HOLD `405e2b2c-00de-4e59-bd9e-24b59147ca34` on uav-02 has status failed and acked false. Its event is `hold (pending)`, actor `operator:op-1`. `POST /missions` returned 200 in 2.7 s. `POST /missions/{id}/start` returned 200 in 53.5 s, inside the 135 s budget (`4 * CNC_ACK_TIMEOUT_S + 15`). The body is status active, `started_at` `2026-10-13T18:33:29Z`, mission id `6884b4fc-180f-4c9e-856e-43ac36777830`. The 15:24Z mission-start `ReadTimeout` stays in the M7.1 result above as the suspend record. This run's 10.3 fails because the HOLD did not ack.
+
+10.4: `socket_subscribers` is 2. The peers are `127.0.0.1:41756` and `172.21.0.1:63898`. The first is the acceptance client inside `cnc-fleet`. The second is the Docker bridge address of a host process that connected through published port `127.0.0.1:8765`. The preflight after the acceptance socket connected did not raise, and criterion 10.1 already recorded `subscribers` 2. The same two peers were present during the Redis fault. The frame has assets, tracks, alerts, missions, recent commands, and zones. All four fleet ids are present. The only operator actor is `operator:op-1`. The pass rule remains one subscriber. This session did not open a browser and did not open a second WebSocket.
+
+Poll stamp to WebSocket receive, 3565 samples. p50 is 531.1 ms, p95 is 1635.3 ms, p99 is 2832.8 ms, and the max is 11485.9 ms. One hundred two samples are over 2 s. Seventeen are over 5 s. The stated 500 ms target is missed. GOTO issue-to-ack p95 is 11973 ms (18 samples, p50 4663 ms). Alert raise-to-dashboard p95 is 1732 ms (14 samples, p50 987 ms). Zone insert to dashboard p95 is 2363 ms (14 samples, p50 1799 ms). No telemetry sample had a negative clock.
+
+Picture-path stages, client samples, milliseconds. UAV n is 1782 and UGV n is 1783.
+
+| Stage | All p50 | All p95 | UAV p95 | UGV p95 |
+| --- | --- | --- | --- | --- |
+| message gap (simulator receive interval) | 20.0 | 96.3 | 122.3 | 48.7 |
+| adapter receive to poll | 12.8 | 78.8 | 104.8 | 32.4 |
+| poll to frame assembly | 255.1 | 1066.9 | 1093.9 | 1026.6 |
+| frame assembly to WebSocket receive | 113.5 | 832.3 | 832.3 | 832.1 |
+| poll to WebSocket receive | 531.1 | 1635.3 | 1684.5 | 1518.5 |
+
+`source_to_adapter` is present for all 3565 client samples. UGV p50 is 23.5 s and p95 is 28.7 s. UAV p50 is −1,371,117 ms, which is the copter clock measured against wall time. Server `poll_to_nats` n is 3645, p50 720.3 ms, p95 2240.7 ms. The 100 ms p95 target is missed. `durable_dropped` is 0. `nats_to_ingest` n is 0.
+
+NATS stop elapsed 2.343 s and the container was exited. `down_s` is 30.0 s, the planned hold. Redis stop elapsed 1.176 s. The ugv-02 adapter stop was offline at once, with the friendly track still active, and after the wait both the asset and the track were lost. Process restart child exit was 0. The four assets and the mission reloaded.
+
+| Process | CPU | Memory |
+| --- | --- | --- |
+| `cnc-fleet` (Gazebo, follower, operator) | 64% to 186% | 261 MiB to 530 MiB |
+| `cnc-sitl-uav-01` | 18% to 59% | docker stats RSS 1.0 MiB to 3.0 MiB |
+| `cnc-sitl-uav-02` | 15% to 66% | docker stats RSS 1.0 MiB to 5.2 MiB |
+| `cnc-nats-1` | 0.3% to 3.8% | 10.3 MiB to 30.9 MiB |
+| `cnc-redis` | 1.0% to 5.3% | 5.0 MiB to 18.3 MiB |
+
+One NATS sample and one Redis sample are the stopped containers during the faults and are left out of those ranges. SITL RSS is the docker-stats value for `network_mode: service:cnc-fleet`.
+
+The harness recorded dashboard HTTP 200, 3420 bytes, and a reference to `dashboard.js`. The map was not opened in a browser during this run.
+
+### Follow-up run, 14 October 2026, 09:56Z
+
+**When:** `2026-10-14T09:56:51Z` to `2026-10-14T10:12:13Z` (921.4 s). `--quick` was not used. Cruise was 660 s.  
+**Tree the operator imported:** commit `f9b8b24`, dirty, 14 paths.  
+**Fleet file:** `/work/fleet.sitl.yaml` inside `cnc-fleet`. Python in the container was 3.10.12. Storage backend was duckdb at `/tmp/cnc-m7/cnc.duckdb`. `cnc-timescale-1` stayed exited.
+
+The run completed and wrote `docs/acceptance_m7.json`. `harness_error` is null. Criteria 10.2 and 10.4 passed. Criteria 10.1 and 10.3 failed. The adapter-stop, Redis, and process-restart faults matched. The NATS fault did not. `cnc-nats-1` and `cnc-redis` were running again at the end.
+
+`scripts/run_fleet_acceptance.sh` held the host awake with `caffeinate -dims`. Thirty-seven docker-stats samples from `09:56:48Z` through `10:16:05Z` have no gap longer than 90 s. The sampler kept running for about four minutes after the report was written.
+
+This slice bounds the command JetStream publish at 2 s (`PUBLISH_TIMEOUT_S`). If that publish does not land, `dispatch_command` runs the adapter in-process. A failed or rejected command writes a second command Event, `{kind} (failed)`, with `operator_id`, asset id, and timestamp. The first Event stays `{kind} (pending)`. `/ws/cop` keeps one subscriber: a `127.0.0.1` client replaces a non-loopback peer, and any other second peer is closed with code 1008 before it joins. Those edits point at EOI 3.3 (commands both ways), 6.x and 2.1 (the command Event carries the operator), and 7.x / 10.4 (one dashboard, one subscriber). The follower, the MAVLink adapter, and the ROS 2 adapter were not edited. `Plan(..., 12, True)` is unchanged.
+
+Opening GOTOs were issued one after another. The observe window stayed 12 s. The 15 m bar is unchanged.
+
+| Vehicle | HTTP | Status | Ack | Elapsed | Metres |
+| --- | --- | --- | --- | --- | --- |
+| uav-01 | 200 | sent | true | 1.3 s | 864.4 |
+| uav-02 | 200 | failed | false | 32.1 s | 236.8 |
+| ugv-01 | 200 | sent | true | 2.7 s | 52.8 |
+| ugv-02 | 200 | sent | true | 3.0 s | 35.9 |
+
+uav-01 command `6a07ba49-2501-4b6e-b878-8714d59547d3`, `issued_by` `operator:op-1`. The path was `POST /assets/uav-01/command`, stamp, OperatorAction, `Platform.issue`, Event `goto (pending)` at `09:57:15.734Z` with `operator_id` `operator:op-1`, then dispatch. The adapter uploaded the waypoint and sent `MAV_CMD_MISSION_START` (300). The ack Event is `ack goto (ok)` at `09:57:16.741Z`, reason `AUTO`. The stored result is `{"ack": true}`. The target in that Event is lat 17.3994736, lon 78.4980637, alt 80, which is the card position plus the harness offset. The end card is lat 17.3915516, lon 78.491844, alt 52.833, status mission, `last_seen` `09:58:07.773Z`. Home is lat 17.385, lon 78.4867. The frozen start card was lat 17.3976736, lon 78.4968637, alt 70.002, `last_seen` `09:57:14.744Z`.
+
+uav-02 command `f48a4b08-e86b-4d28-b498-2041722e5185` reached the adapter and came back rejected. The result text is `EKF2 IMU1 in-flight yaw alignment complete`, which is the vehicle text kept when the waypoint upload fails. Events are `goto (pending)` at `09:57:17.564Z`, `ack goto (rejected)` at `09:57:48.782Z`, and `goto (failed)` at `09:57:49.392Z` with `operator_id` `operator:op-1`. The end card is lat 17.3899997, lon 78.4899997, alt 30.004, `last_seen` `09:58:07.870Z`, against home lat 17.39, lon 78.49. The 236.8 m figure is the distance from the frozen start card (lat 17.3917989, lon 78.4888058, alt 0.01) to that end card.
+
+10.1 is false on the type conjunct. The predicate requires two `uav` cards, two `ugv` cards, four distinct homes, and four movements of at least 15 m. Homes are the four fleet homes. Every movement is at least 15 m. The cards frozen when the four ids first appeared typed uav-01 and uav-02 as `other` and both rovers as `ugv`, so the UAV count was 0. The end cards type both aircraft as `uav`. The predicate reads the frozen cards. A per-asset delta builds cards from a reduced snapshot, and `present_snapshot` supplies a missing id from the Redis overlay as `asset_type` `other`. The acceptance client merges that row onto the existing card, which can replace the type and the pose and leave `home_lat` and `last_seen` from the earlier card. The saved asset rows at the end of the run are `uav` and `ugv`. This slice does not change that merge, the 12 s window, or the 15 m bar.
+
+10.2 passed. Detection `det-5409ac88` tasked ugv-02, command `8097bfd0-8ef3-49d4-966c-ed6c858872c2`, status sent, actor `operator:op-1`.
+
+10.3: HOLD `9614931c-520a-473c-a45c-6ede751fba85` on uav-02, `issued_by` `operator:op-1`, status failed, acked false. The adapter called `_set_mode("LOITER")` (`MAV_CMD_DO_SET_MODE`, 176) and returned false. The stored result is `{"error": "hold rejected"}`. Events are `hold (pending)` at `09:58:13.045Z` (`operator_id` `operator:op-1`), `ack hold (rejected)` at `09:58:44.845Z` (actor `adapter`), and `hold (failed)` at `09:58:45.363Z` (`operator_id` `operator:op-1`, asset `uav-02`). A second `ack hold (rejected)` is stored at `09:58:46.293Z`. `POST /missions` returned 200 in 1.7 s. `POST /missions/{id}/start` returned 200 in 10.7 s, inside the 135 s budget. Mission `b1818912-e461-4110-8c6b-5a2e860d8073` is status active, `started_at` `2026-10-14T09:58:48.042Z`. The 15:24Z `ReadTimeout` stays in the M7.1 result as the suspend record. This run's 10.3 fails because `hold_acked` is false. The vehicle rejected HOLD. The follower and the MAVLink adapter were left unchanged.
+
+10.4: `socket_subscribers` is 1. The only peer is `127.0.0.1:41996`, the acceptance client inside `cnc-fleet`. The same peer was the only subscriber during the Redis fault. The frame has assets, tracks, alerts, missions, recent commands, and zones. All four fleet ids are present. The only operator actor is `operator:op-1`. The harness recorded dashboard HTTP 200, 3420 bytes, and a reference to `dashboard.js`. The map was not opened in a browser during this run, and no second socket was opened on port 8765.
+
+Poll stamp to WebSocket receive, 6369 samples. p50 is 342.0 ms, p95 is 710.4 ms, p99 is 955.5 ms, and the max is 2124.5 ms. Four samples are over 2 s. None are over 5 s. The stated 500 ms target is missed. GOTO issue-to-ack p95 is 2810 ms (15 samples, p50 1990 ms). Alert raise-to-dashboard p95 is 1014 ms (12 samples, p50 543 ms). Zone insert to dashboard p95 is 1449 ms (12 samples, p50 1132 ms). No telemetry sample had a negative clock.
+
+Picture-path stages, client samples, milliseconds. UAV n is 3183 and UGV n is 3186.
+
+| Stage | All p50 | All p95 | UAV p95 | UGV p95 |
+| --- | --- | --- | --- | --- |
+| message gap (simulator receive interval) | 14.3 | 54.0 | 61.6 | 26.5 |
+| adapter receive to poll | 9.0 | 41.9 | 49.8 | 20.3 |
+| poll to frame assembly | 163.3 | 511.0 | 515.6 | 502.2 |
+| frame assembly to WebSocket receive | 66.6 | 436.6 | 453.1 | 417.5 |
+| poll to WebSocket receive | 342.0 | 710.4 | 737.2 | 678.5 |
+
+`source_to_adapter` is present for all 6369 client samples. All p50 is 35.1 ms and p95 is 4534 ms. UGV p50 is 3926 ms and p95 is 4584 ms. UAV p50 is −1,367,528 ms, which is the copter clock measured against wall time. Server `source_to_adapter` n is 6490, p50 −166,010 ms, p95 4533 ms. Server `poll_to_nats` n is 6486, p50 399.1 ms, p95 807.1 ms, max 2121.8 ms. The 100 ms p95 target is missed. `durable_dropped` is 0. `nats_to_ingest` n is 0.
+
+NATS stop elapsed 0.444 s and the container was exited. `down_s` is 30.010 s. The fault GOTO on ugv-01, command `481f11bd-e1ae-45bc-9dd9-d6bb48648337`, returned HTTP 200 in 677 ms with status sent and ack true while the broker was down. That is the in-process send used when the command publish does not land. The fault text expected the GOTO to stay pending until NATS returned, so `matched_expected` is false. After the broker listened again the same command was still sent, ack true, and the outbox row had one attempt. Redis stop elapsed 0.432 s. During that fault the socket still had one peer, `127.0.0.1:41996`. The ugv-02 adapter stop was offline at once, with the friendly track still active, and after the wait both the asset and the Wolf-2 track were lost. Process restart child exit was 0. The four assets and mission `b1818912-e461-4110-8c6b-5a2e860d8073` reloaded.
+
+| Process | CPU | Memory |
+| --- | --- | --- |
+| `cnc-fleet` (Gazebo, follower, operator) | 82% to 197% | 417 MiB to 799 MiB |
+| `cnc-sitl-uav-01` | 19% to 40% | docker stats RSS 3.6 MiB to 6.5 MiB |
+| `cnc-sitl-uav-02` | 20% to 37% | docker stats RSS 1.0 MiB to 2.0 MiB |
+| `cnc-nats-1` | 0.2% to 7.5% | 10.5 MiB to 41.8 MiB |
+| `cnc-redis` | 0.6% to 2.9% | 5.6 MiB to 7.9 MiB |
+
+One NATS sample and one Redis sample are the stopped containers during the faults and are left out of those ranges. SITL RSS is the docker-stats value for `network_mode: service:cnc-fleet`.
 
 ### Previous record, 13:20Z
 

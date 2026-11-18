@@ -4,6 +4,7 @@ import json
 
 import pytest
 
+from src.data import historical
 from src.data.ingest import (
     configure,
     ingest_alert,
@@ -12,6 +13,7 @@ from src.data.ingest import (
     ingest_track,
 )
 from src.data.redis_live import RedisLiveStore
+from src.data_services.durable import DuckDBDurableStore
 
 
 class MemoryLive:
@@ -177,6 +179,93 @@ def test_live_failure_still_writes_durable(pipeline):
     assert "ingested_at" in record
     assert ("track", "T-9") not in live.objects
     assert durable.tracks["T-9"]["lat"] == 1.0
+
+
+def test_duckdb_telemetry_buffers_until_the_batch_size(monkeypatch):
+    monkeypatch.delenv("STORAGE_BACKEND", raising=False)
+    historical._pending.clear()
+    monkeypatch.setattr(historical, "TELEMETRY_BATCH_ROWS", 2)
+    parts = []
+
+    def append(records):
+        parts.append(list(records))
+        return "part"
+
+    class Repos:
+        class telemetry:
+            @staticmethod
+            def insert(**kwargs):
+                raise AssertionError(kwargs)
+
+    monkeypatch.setattr("src.data.historical.append_telemetry", append)
+    monkeypatch.setattr("src.data_services.repositories.get_repositories", lambda: Repos())
+    first = {"platform_id": "uav-01", "lat": 17.4, "lon": 78.5}
+    second = {"platform_id": "uav-02", "lat": 17.5, "lon": 78.6}
+    try:
+        DuckDBDurableStore().save_telemetry(first)
+        assert parts == []
+        DuckDBDurableStore().save_telemetry(second)
+        assert parts == [[first, second]]
+    finally:
+        timer = historical._flush_timer
+        if timer is not None:
+            timer.cancel()
+            historical._flush_timer = None
+        historical._pending.clear()
+
+
+def test_postgres_telemetry_inserts_the_hypertable_and_skips_parquet(monkeypatch):
+    monkeypatch.setenv("STORAGE_BACKEND", "postgres")
+    inserted = []
+
+    class Telemetry:
+        def insert(self, **kwargs):
+            inserted.append(kwargs)
+
+    class Repos:
+        telemetry = Telemetry()
+
+    def append(records):
+        raise AssertionError(records)
+
+    monkeypatch.setattr("src.data.historical.append_telemetry", append)
+    monkeypatch.setattr("src.data_services.repositories.get_repositories", lambda: Repos())
+    DuckDBDurableStore().save_telemetry({
+        "platform_id": "uav-01",
+        "lat": 17.4,
+        "lon": 78.5,
+        "alt": 30,
+        "heading": 90,
+        "speed": 12,
+        "battery_percent": 80,
+        "status": "mission",
+        "mode": "auto",
+        "ts": "2026-10-14T09:57:15+00:00",
+    })
+    DuckDBDurableStore().save_telemetry({"asset_id": "ugv-01", "battery": 40})
+    with pytest.raises(ValueError):
+        DuckDBDurableStore().save_telemetry({})
+
+    assert len(inserted) == 2
+    row = inserted[0]
+    assert row["asset_id"] == "uav-01"
+    assert row["lat"] == 17.4
+    assert row["lon"] == 78.5
+    assert row["alt"] == 30.0
+    assert row["heading"] == 90.0
+    assert row["speed"] == 12.0
+    assert row["battery"] == 80.0
+    assert row["status"] == "mission"
+    assert row["mode"] == "auto"
+    assert row["timestamp"].tzinfo is not None
+    assert row["timestamp"].utcoffset().total_seconds() == 0
+    sparse = inserted[1]
+    assert sparse["asset_id"] == "ugv-01"
+    assert sparse["lat"] == 0.0
+    assert sparse["battery"] == 40.0
+    assert sparse["status"] == ""
+    assert sparse["mode"] == ""
+    assert sparse["timestamp"].tzinfo is not None
 
 
 def test_redis_live_store_uses_phase1_keys():

@@ -49,18 +49,49 @@ class CopHub:
 
     def __init__(self) -> None:
         self._queues: list[asyncio.Queue] = []
+        self._peers: dict[int, str] = {}
         self.loop: asyncio.AbstractEventLoop | None = None
 
     @property
     def subscribers(self) -> int:
         return len(self._queues)
 
-    def subscribe(self) -> asyncio.Queue:
+    @property
+    def peers(self) -> list[str]:
+        return [self._peers.get(id(queue), "") for queue in self._queues]
+
+    def subscribe(self, peer: str = "") -> asyncio.Queue:
         queue: asyncio.Queue = asyncio.Queue(maxsize=32)
         self._queues.append(queue)
+        self._peers[id(queue)] = peer
         return queue
 
+    def claim(self, peer: str) -> asyncio.Queue | None:
+        """One /ws/cop subscriber. A loopback client replaces a published-port peer."""
+        if not self._queues:
+            return self.subscribe(peer)
+        if _loopback(peer) and any(not _loopback(item) for item in self.peers):
+            for queue in list(self._queues):
+                if not _loopback(self._peers.get(id(queue), "")):
+                    self._release(queue)
+            if not self._queues:
+                return self.subscribe(peer)
+        return None
+
+    def _release(self, queue: asyncio.Queue) -> None:
+        self.unsubscribe(queue)
+        if queue.full():
+            try:
+                queue.get_nowait()
+            except asyncio.QueueEmpty:
+                pass
+        try:
+            queue.put_nowait(None)
+        except asyncio.QueueFull:
+            pass
+
     def unsubscribe(self, queue: asyncio.Queue) -> None:
+        self._peers.pop(id(queue), None)
         try:
             self._queues.remove(queue)
         except ValueError:
@@ -77,6 +108,11 @@ class CopHub:
                 queue.put_nowait(frame)
             except asyncio.QueueFull:
                 pass
+
+
+def _loopback(peer: str) -> bool:
+    host = peer.rsplit(":", 1)[0] if peer else ""
+    return host in {"127.0.0.1", "::1", "localhost"}
 
 
 hub = CopHub()

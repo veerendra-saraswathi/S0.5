@@ -27,6 +27,7 @@ from src.operator_app.app import platform, ws_cop
 from src.operator_app.coordinate import nearest_ugv, task_nearest_ugv, track_from_detection
 from src.operator_app.demo_fleet import demo_adapters, demo_homes, demo_subjects
 from src.operator_app.live_feed import (
+    CopHub,
     command_phase,
     hub,
     mission_progress,
@@ -63,9 +64,15 @@ class _MemStore:
         return alert
 
 
+class _Client:
+    host = "127.0.0.1"
+    port = 1
+
+
 class _Socket:
     def __init__(self) -> None:
         self.sent: list[dict] = []
+        self.client = _Client()
 
     async def accept(self) -> None:
         return None
@@ -76,7 +83,7 @@ class _Socket:
     async def send_text(self, payload: str) -> None:
         self.sent.append(json.loads(payload))
 
-    async def close(self) -> None:
+    async def close(self, code: int = 1000) -> None:
         return None
 
 
@@ -143,6 +150,22 @@ def test_command_phase_and_mission_progress():
     assert frame["recent_commands"][0]["phase"] == "acked"
     assert frame["missions"][0]["progress"] == 1.0
     assert frame["zones"][0]["kind"] == "keep-out"
+
+
+def test_loopback_replaces_a_published_port_peer():
+    local = CopHub()
+    first = local.claim("172.21.0.1:63898")
+    assert first is not None
+    assert local.subscribers == 1
+    assert local.claim("172.21.0.1:9") is None
+    assert local.subscribers == 1
+    assert local.peers == ["172.21.0.1:63898"]
+    taken = local.claim("127.0.0.1:41756")
+    assert taken is not None
+    assert local.subscribers == 1
+    assert local.peers == ["127.0.0.1:41756"]
+    assert local.claim("127.0.0.1:1") is None
+    assert local.subscribers == 1
 
 
 def test_hub_pushes_a_frame_without_waiting():

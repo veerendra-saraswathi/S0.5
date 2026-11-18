@@ -25,7 +25,7 @@ from src.data.subjects import (
 from src.data_services.event_store import event_store
 from src.data_services.repositories import get_repositories
 from src.kernel.models import Alert, AlertLevel, Command, EventType
-from src.operator_app.adapters.telemetry_publish import publish_command_ack
+from src.operator_app.adapters.telemetry_publish import PUBLISH_TIMEOUT_S, publish_command_ack
 
 Lookup = Callable[[str], object]
 _consumers: list[PullConsumer] = []
@@ -81,6 +81,7 @@ async def _start_command_bridge() -> bool:
             await consumer.stop()
         raise
     _consumers = started
+    get_bus().subscribe_local(ACK_FILTER, _on_ack)
     return True
 
 
@@ -128,6 +129,26 @@ def _loaded_command(command_id: str) -> Command | None:
     except Exception:
         return None
     return platform.store.commands.get(command_id)
+
+
+def _record_terminal_event(cmd: Command) -> None:
+    """One command Event after pending. Carries the operator, the time, and the asset."""
+    if cmd.status == "pending":
+        return
+    kind = cmd.command_type.value if hasattr(cmd.command_type, "value") else str(cmd.command_type)
+    event_store.add(
+        EventType.COMMAND,
+        f"{kind} ({cmd.status})",
+        asset_id=cmd.asset_id,
+        actor=cmd.issued_by,
+        data={
+            "operator_id": cmd.issued_by,
+            "command_id": cmd.id,
+            "command_type": kind,
+            "status": cmd.status,
+            "payload": dict(cmd.parameters or {}),
+        },
+    )
 
 
 def _settle(command_id: str, ok: bool, reason: str) -> None:
@@ -204,17 +225,18 @@ async def dispatch_command(platform, cmd: Command) -> None:
         bus.forget_ack(cmd.id)
         raise
     if not command_published(cmd.id):
+        # JetStream did not take the row. Run the adapter here so the HTTP
+        # call is not stuck on an unbounded publish. A later relay delivery
+        # hits deliver_once and does not apply the vehicle command again.
         bus.forget_ack(cmd.id)
-        cmd.status = "pending"
-        cmd.result = {"queued": True}
-        _watch(cmd)
-        remember_command(cmd)
-        _notify()
+        await _send_local(platform, cmd)
+        if cmd.status == "failed":
+            _record_terminal_event(cmd)
         return
     cmd.status = "sent"
     remember_command(cmd)
     _notify()
-    ack = await bus.wait_ack(cmd.id, ack_timeout())
+    ack = await bus.wait_ack(cmd.id, ack_timeout() + PUBLISH_TIMEOUT_S)
     bus.forget_ack(cmd.id)
     if ack is None:
         alert = await record_ack_timeout(platform, cmd)
@@ -222,6 +244,7 @@ async def dispatch_command(platform, cmd: Command) -> None:
         cmd.result = {"error": "ack timeout", "alert_id": alert.id}
         remember_command(cmd)
         _notify()
+        _record_terminal_event(cmd)
         return
     if ack.get("ok"):
         cmd.status = "sent"
@@ -229,6 +252,7 @@ async def dispatch_command(platform, cmd: Command) -> None:
     else:
         cmd.status = "failed"
         cmd.result = {"error": ack.get("reason") or "adapter rejected"}
+        _record_terminal_event(cmd)
     remember_command(cmd)
     _notify()
 
@@ -257,7 +281,7 @@ async def record_ack_timeout(platform, cmd: Command) -> Alert:
     body = alert.model_dump(mode="json")
     body["command_id"] = cmd.id
     bus = get_bus()
-    if not await bus.publish_jetstream(ALERT_SUBJECT, body):
+    if not await bus.publish_jetstream(ALERT_SUBJECT, body, timeout=PUBLISH_TIMEOUT_S):
         await bus.deliver_local(ALERT_SUBJECT, body)
     return alert
 

@@ -47,9 +47,39 @@ class DuckDBDurableStore:
         return self._bundle
 
     def save_telemetry(self, record: dict) -> None:
-        from src.data.historical import append_telemetry
+        from src.data_services.repositories import storage_backend
 
-        append_telemetry([record])
+        if storage_backend() == "postgres":
+            self._save_postgres_telemetry(record)
+            return
+        from src.data.historical import buffer_telemetry
+
+        buffer_telemetry(record)
+
+    def _save_postgres_telemetry(self, record: dict) -> None:
+        """Hypertable insert. Does not write a Parquet part."""
+        from src.data_services.repositories import get_repositories
+
+        asset_id = str(record.get("platform_id") or record.get("asset_id") or "")
+        if not asset_id:
+            raise ValueError("asset id required")
+        battery = record.get("battery_percent")
+        if battery is None:
+            battery = record.get("battery")
+        get_repositories().telemetry.insert(
+            asset_id=asset_id,
+            timestamp=_as_dt(
+                record.get("ts") or record.get("timestamp") or record.get("ingested_at")
+            ),
+            lat=_float(record.get("lat")),
+            lon=_float(record.get("lon")),
+            alt=_float(record.get("alt")),
+            heading=_float(record.get("heading")),
+            speed=_float(record.get("speed")),
+            battery=_float(battery),
+            status=str(_text(record.get("status"), "")),
+            mode=str(_text(record.get("mode"), "")),
+        )
 
     def save_track(self, track: dict) -> None:
         track_id = str(track.get("track_id") or track.get("id") or "")

@@ -98,7 +98,9 @@ class MessageBus:
             self._resume.append(callback)
 
     def subscribe_local(self, pattern: str, callback: LocalHandler) -> None:
-        self._local.append((pattern, callback))
+        pair = (pattern, callback)
+        if pair not in self._local:
+            self._local.append(pair)
 
     def has_local(self, subject: str) -> bool:
         return any(subject_matches(pattern, subject) for pattern, _ in self._local)

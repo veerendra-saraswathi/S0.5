@@ -214,3 +214,16 @@ def test_query_recent_escapes_a_quote_in_the_lake_path(monkeypatch, tmp_path):
     raw = str(lake / "telemetry" / "**" / "*.parquet")
     assert raw.replace("'", "''") in sql
     assert raw not in sql
+
+
+def test_failed_flush_keeps_rows_for_retry(monkeypatch):
+    rows = [{"value": 1}]
+    monkeypatch.setattr(historical, "_pending", rows.copy())
+
+    def fail_write(records):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(historical, "append_telemetry", fail_write)
+    with pytest.raises(OSError, match="disk full"):
+        historical.flush_telemetry()
+    assert historical._pending == rows

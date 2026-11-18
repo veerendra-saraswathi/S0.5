@@ -86,8 +86,9 @@ def _flush_locked() -> str | None:
     if not _pending:
         return None
     rows = list(_pending)
+    result = append_telemetry(rows)
     _pending.clear()
-    return append_telemetry(rows)
+    return result
 
 
 def query_recent(platform_id: str | None = None, limit: int = 100):

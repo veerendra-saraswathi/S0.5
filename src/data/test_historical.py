@@ -264,3 +264,17 @@ def test_query_recent_closes_connection_on_read_error(monkeypatch):
     with pytest.raises(duckdb.IOException, match="read failed"):
         query_recent()
     assert conn.closed
+
+
+def test_query_recent_reads_filters_and_orders_parquet(monkeypatch, tmp_path):
+    monkeypatch.setattr(historical, "LAKE_ROOT", tmp_path / "lab's archive")
+    for second, platform in [(3, "bench-A"), (1, "bench-A"), (4, "bench-B"), (2, "bench-A")]:
+        historical.append_telemetry([{
+            "ts": f"2026-01-01T00:00:0{second}Z",
+            "platform_id": platform,
+            "value": second,
+        }])
+
+    assert query_recent("bench-A", limit=2)["value"].to_list() == [3, 2]
+    assert query_recent(limit=1)["value"].to_list() == [4]
+    assert query_recent("absent", limit=2).is_empty()

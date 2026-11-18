@@ -1,4 +1,5 @@
 import atexit
+from contextlib import closing
 import threading
 
 import polars as pl
@@ -107,7 +108,6 @@ def query_recent(platform_id: str | None = None, limit: int = 100):
     if bound_limit < 0:
         raise ValueError("limit must be an integer")
 
-    con = duckdb.connect()
     path = str(LAKE_ROOT / "telemetry" / "**" / "*.parquet").replace("'", "''")
     q = f"SELECT * FROM read_parquet('{path}', union_by_name=true)"
     params: list = []
@@ -116,4 +116,5 @@ def query_recent(platform_id: str | None = None, limit: int = 100):
         params.append(str(platform_id))
     q += " ORDER BY ts DESC LIMIT ?"
     params.append(bound_limit)
-    return con.execute(q, params).pl()
+    with closing(duckdb.connect()) as con:
+        return con.execute(q, params).pl()

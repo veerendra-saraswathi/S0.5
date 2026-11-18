@@ -18,6 +18,10 @@ class _Result:
 class _Conn:
     def __init__(self):
         self.calls = []
+        self.closed = False
+
+    def close(self):
+        self.closed = True
 
     def execute(self, query, params=None):
         self.calls.append((query, params))
@@ -34,6 +38,7 @@ def test_query_recent_binds_platform_id_and_limit(monkeypatch):
     conn = _stub(monkeypatch)
     payload = "uav-01' OR '1'='1"
     query_recent(payload, limit=5)
+    assert conn.closed
     sql, params = conn.calls[0]
     assert sql.count("?") == 2
     assert "WHERE platform_id = ?" in sql
@@ -247,3 +252,15 @@ def test_partial_write_never_becomes_visible(monkeypatch, tmp_path):
     with pytest.raises(OSError, match="write interrupted"):
         historical.append_telemetry([{"value": 1}])
     assert not any(path.is_file() for path in tmp_path.rglob("*"))
+
+
+def test_query_recent_closes_connection_on_read_error(monkeypatch):
+    conn = _stub(monkeypatch)
+
+    def fail_read(query, params):
+        raise duckdb.IOException("read failed")
+
+    monkeypatch.setattr(conn, "execute", fail_read)
+    with pytest.raises(duckdb.IOException, match="read failed"):
+        query_recent()
+    assert conn.closed

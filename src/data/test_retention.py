@@ -130,3 +130,51 @@ def test_export_cannot_replace_range_during_delete(tmp_path, monkeypatch):
     assert drop_after_marker(previous["marker"], delete=delete) == 1
     assert writes == []
     assert export_for_drop([{}, {}], **key, write=lambda rows, path: path)["count"] == 2
+
+
+def test_crashed_export_releases_only_its_range_lock(monkeypatch, tmp_path):
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    monkeypatch.setattr(retention, "LAKE_ROOT", tmp_path)
+    key = {"table": "events", "range_key": "day"}
+    previous = export_for_drop([{}], **key, write=lambda rows, path: path)
+
+    child_code = """
+import sys
+from pathlib import Path
+from src.data import retention
+
+retention.LAKE_ROOT = Path(sys.argv[1])
+
+def paused_write(rows, path):
+    print("locked", flush=True)
+    sys.stdin.readline()
+    return path
+
+retention.export_for_drop([{}], table="events", range_key="day", write=paused_write)
+"""
+    from concurrent.futures import ThreadPoolExecutor
+
+    root = Path(retention.__file__).resolve().parents[2]
+    with subprocess.Popen(
+        [sys.executable, "-c", child_code, str(tmp_path)],
+        cwd=root, stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True,
+    ) as child, ThreadPoolExecutor(max_workers=1) as reader:
+        try:
+            assert reader.submit(child.stdout.readline).result(timeout=10) == "locked\n"
+            calls = []
+            assert export_for_drop([{}], **key, write=lambda *args: calls.append(args)) is None
+            assert drop_after_marker(previous["marker"], delete=calls.append) is None
+            assert calls == []
+            other = export_for_drop([{}], table="events", range_key="other",
+                                    write=lambda rows, path: path)
+            assert other["count"] == 1
+        finally:
+            child.kill()
+            child.wait(timeout=10)
+
+    assert not Path(previous["marker"]).exists()
+    retry = export_for_drop([{}, {}], **key, write=lambda rows, path: path)
+    assert Path(retry["marker"]).read_text() == "2"

@@ -100,4 +100,33 @@ def test_partial_marker_never_authorizes_deletion(tmp_path, monkeypatch):
     )
     assert result is None
     assert deletions == []
-    assert list(marker.parent.iterdir()) == []
+    assert not any(path.is_file() for path in marker.parent.iterdir())
+
+
+def test_repeat_export_revokes_old_marker_before_writer_runs(tmp_path, monkeypatch):
+    monkeypatch.setattr(retention, "LAKE_ROOT", tmp_path)
+    key = {"table": "events", "range_key": "day"}
+    previous = export_for_drop([{}], **key, write=lambda rows, path: path)
+    calls = []
+
+    def failed_write(rows, path):
+        drop_after_marker(previous["marker"], delete=calls.append)
+        raise OSError("disk full")
+
+    assert export_for_drop([{}, {}], **key, write=failed_write) is None
+    assert drop_after_marker(previous["marker"], delete=calls.append) is None
+    assert calls == []
+
+
+def test_export_cannot_replace_range_during_delete(tmp_path, monkeypatch):
+    monkeypatch.setattr(retention, "LAKE_ROOT", tmp_path)
+    key = {"table": "events", "range_key": "day"}
+    previous = export_for_drop([{}], **key, write=lambda rows, path: path)
+    writes = []
+
+    def delete(count):
+        assert export_for_drop([{}, {}], **key, write=lambda *args: writes.append(args)) is None
+
+    assert drop_after_marker(previous["marker"], delete=delete) == 1
+    assert writes == []
+    assert export_for_drop([{}, {}], **key, write=lambda rows, path: path)["count"] == 2

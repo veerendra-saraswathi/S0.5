@@ -6,7 +6,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 LAKE_ROOT = Path("data/lake")
-LAKE_ROOT.mkdir(parents=True, exist_ok=True)
 
 TELEMETRY_BATCH_ROWS = 500
 TELEMETRY_FLUSH_S = 5.0

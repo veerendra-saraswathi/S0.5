@@ -1,6 +1,7 @@
 """Export marker for a later retention drop. No database and no Parquet file."""
 
 from pathlib import Path
+from uuid import uuid4
 
 LAKE_ROOT = Path("data/lake")
 
@@ -17,9 +18,14 @@ def export_for_drop(rows: list[dict], *, table: str, range_key: str, write) -> d
     if written is None:
         return None
     marker = LAKE_ROOT / "_markers" / f"{table}-{range_key}.ok"
+    pending = marker.with_suffix(f".{uuid4().hex}.tmp")
     try:
         marker.parent.mkdir(parents=True, exist_ok=True)
-        marker.write_text(str(len(rows)))
+        try:
+            pending.write_text(str(len(rows)))
+            pending.replace(marker)
+        finally:
+            pending.unlink(missing_ok=True)
     except Exception:
         return None
     return {

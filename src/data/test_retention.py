@@ -79,3 +79,25 @@ def test_drop_after_marker_calls_the_deleter_only_for_a_positive_count(tmp_path)
         raise RuntimeError("drop failed")
 
     assert drop_after_marker(marker, delete=boom) is None
+
+
+def test_partial_marker_never_authorizes_deletion(tmp_path, monkeypatch):
+    from pathlib import Path
+
+    monkeypatch.setattr(retention, "LAKE_ROOT", tmp_path)
+    marker = tmp_path / "_markers" / "events-day.ok"
+    write_text = Path.write_text
+    deletions = []
+
+    def interrupted_write(path, text):
+        write_text(path, text[:1])
+        drop_after_marker(marker, delete=deletions.append)
+        raise OSError("write interrupted")
+
+    monkeypatch.setattr(Path, "write_text", interrupted_write)
+    result = export_for_drop(
+        [{}] * 12, table="events", range_key="day", write=lambda rows, path: path
+    )
+    assert result is None
+    assert deletions == []
+    assert list(marker.parent.iterdir()) == []

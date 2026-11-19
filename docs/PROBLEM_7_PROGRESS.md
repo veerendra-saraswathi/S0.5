@@ -15,10 +15,24 @@ incomplete runs and the reportable flag before using a result for a milestone.
 | Four heterogeneous assets and extensible adapters | M5 simulation passed 10.1; later M7 run failed it | Repeatable release result for the agreed real, simulated or hybrid configuration and documented adapter interfaces |
 | Communication, asset status and cross-asset information exchange | Both reference runs passed 10.2 | Recorded release run and configuration, including agreed communication and recovery checks |
 | Single operator interface, platform control and common picture | Both runs passed 10.4; mixed evidence for 10.3 | Same release demonstrates both criteria and the required displays and alerts |
-| Data services, security and audit | Repository tests cover portions of persistence, archive and audit | Evidence for access control, attribution, persistence and recovery in the release configuration |
+| Data services, security and audit | Archive snapshot consistency verified on DuckDB and PostgreSQL. See the 19 November validation below | Evidence for access control, attribution, persistence and recovery in the release configuration |
 | Deployment and equipment | Local development configuration and simulation fleet | Reproducible installation, dependencies and agreed equipment inventory |
 | Handover and acceptance | Source, adapters, architecture notes and historical test reports | Release source, design, operator and administrator manuals, final test report, demonstration and acceptance record |
 
 Update this table when a deliverable is verified. Record the evidence path and release
 commit. Revisit the estimate after a comparable acceptance run or delivery milestone.
 The signed SoW and agreed acceptance configuration govern the final checklist.
+
+## Archive validation on 19 November 2026
+
+Candidate commit `ac87a6c`. The DuckDB and PostgreSQL cases of
+`test_archive_collection_pins_one_source_snapshot` in
+`src/data_services/test_repositories.py` passed. Both cases check that an event
+and an alert committed halfway through collection appear only in the next export.
+
+The PostgreSQL result comes from the developer's local terminal run. A disposable
+`timescale/timescaledb-ha:pg16` instance applied migrations through
+`0003_snapshot_and_command_status`. Pytest reported 1 passed in 3.37 seconds.
+The image digest was `sha256:5d1a6980aa255b5035e24e0de6808c134bf2bf19cf551571acbd092ad38a4b8d`.
+
+A fresh four-asset acceptance result for this candidate remains pending.

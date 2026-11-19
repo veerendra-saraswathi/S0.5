@@ -178,26 +178,42 @@ def test_interrupted_upload_preserves_remote_snapshot_and_allows_retry(tmp_path,
     monkeypatch.setenv("MINIO_ENDPOINT", "archive.test")
     monkeypatch.setitem(sys.modules, "minio", SimpleNamespace(Minio=lambda *a, **kw: Client()))
 
-    first = write_after_action("archive", [], tmp_path)
+    asset = f"archive-{uuid4()}"
+    events = get_repositories().events
+    first_event = f"{asset}-A"
+    second_event = f"{asset}-B"
+
+    def remote_event_ids(manifest_key):
+        entry = json.loads(objects[manifest_key])["files"]["events"]
+        return sorted(pl.read_parquet(objects[f"archive/{entry}"])["event_id"].to_list())
+
+    events.insert(first_event, WHEN, "review", "first", asset, "info", {})
+    first = write_after_action("archive", [asset], tmp_path)
     assert first["uploaded"]
     current_key = "archive/manifest.json"
     original = objects[current_key]
     pinned = "archive/generations/" + first["generation"] + "/manifest.json"
 
+    assert remote_event_ids(current_key) == [first_event]
+    events.insert(second_event, WHEN, "review", "second", asset, "info", {})
     interrupt = True
-    failed = write_after_action("archive", [], tmp_path)
+    failed = write_after_action("archive", [asset], tmp_path)
     assert len(failures) == 1
     assert failed["upload_status"] == "failed"
     assert not failed["uploaded"]
     assert objects[current_key] == original
+    assert remote_event_ids(current_key) == [first_event]
+    assert sorted(pl.read_parquet(failed["files"]["events"])["event_id"].to_list()) == [first_event, second_event]
     assert json.loads(Path(failed["manifest"]).read_bytes())["generation"] == failed["generation"]
 
     interrupt = False
-    retry = write_after_action("archive", [], tmp_path)
+    retry = write_after_action("archive", [asset], tmp_path)
     assert retry["upload_status"] == "uploaded"
     assert retry["uploaded"]
     assert json.loads(objects[current_key])["generation"] == retry["generation"]
     assert objects[pinned] == original
+    assert remote_event_ids(pinned) == [first_event]
+    assert remote_event_ids(current_key) == [first_event, second_event]
     for result, manifest_key in [(first, pinned), (retry, current_key)]:
         for name, entry in json.loads(objects[manifest_key])["files"].items():
             assert objects[f"archive/{entry}"] == Path(result["files"][name]).read_bytes()

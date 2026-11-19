@@ -1,5 +1,6 @@
 """Publish export markers and serialize retention operations for each range."""
 
+import json
 import sqlite3
 from contextlib import closing, contextmanager
 from pathlib import Path
@@ -8,6 +9,7 @@ from uuid import uuid4
 import polars as pl
 
 LAKE_ROOT = Path("data/lake")
+MARKER_FORMAT = "s05.parquet-row-count.v1"
 
 
 @contextmanager
@@ -44,7 +46,7 @@ def export_for_drop(rows: list[dict], *, table: str, range_key: str, write) -> d
                 staged.unlink(missing_ok=True)
             pending = marker.with_suffix(f".{uuid4().hex}.tmp")
             try:
-                pending.write_text(str(count))
+                pending.write_text(json.dumps({"format": MARKER_FORMAT, "row_count": count}))
                 pending.replace(marker)
             finally:
                 pending.unlink(missing_ok=True)
@@ -60,8 +62,11 @@ def drop_after_marker(marker, *, delete) -> int | None:
         return None
     try:
         with _range_lock(path):
-            count = int(path.read_text().strip())
-            if count <= 0:
+            record = json.loads(path.read_text())
+            if not isinstance(record, dict) or record.get("format") != MARKER_FORMAT:
+                return None
+            count = record.get("row_count")
+            if type(count) is not int or count <= 0:
                 return None
             delete(count)
     except Exception:

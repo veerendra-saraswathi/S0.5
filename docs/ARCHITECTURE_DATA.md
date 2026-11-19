@@ -19,7 +19,9 @@
 
 The writer passed to `export_for_drop` must write Parquet to the supplied temporary path and return a non-None result on success. Under the range lock, the exporter revokes any old marker, reads the staged file, and checks its row count against the submitted batch size. It replaces the final Parquet file only after that check passes, then publishes the count in `data/lake/_markers/<table>-<range>.ok`. The result contains the marker path, count, and final Parquet path. An empty batch or failed verification leaves the range without a marker.
 
-`drop_after_marker` calls an injected deleter only when that marker file exists and its text is a positive count, and it returns that count. A missing marker, an empty or non-positive marker, or a deleter that raises returns `None`.
+`drop_after_marker` calls an injected deleter only when that marker file exists and it contains a JSON record with format `s05.parquet-row-count.v1` and a positive integer `row_count`, and it returns that count. A missing marker, an empty or non-positive marker, or a deleter that raises returns `None`.
+
+During an upgrade, stop any older deletion workers before resuming retention. The new reader skips legacy count-only markers. Re-export each affected range from its source rows to regenerate its marker through the verified write path. A format tag records the verification method used at export time. It does not authenticate the marker or detect later archive changes.
 
 Still open: the daily schedule and the failure counter.
 

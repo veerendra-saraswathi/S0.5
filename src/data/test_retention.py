@@ -1,5 +1,6 @@
 """Retention markers authorize verified Parquet exports."""
 
+import json
 from pathlib import Path
 
 import polars as pl
@@ -31,7 +32,7 @@ def test_export_for_drop_writes_the_marker_only_after_a_successful_write(
     marker = tmp_path / "_markers" / "telemetry-2026-04-14.ok"
     assert calls == [rows]
     assert result == {"marker": str(marker), "count": 2, "parquet": parquet}
-    assert marker.read_text() == "2"
+    assert json.loads(marker.read_text()) == {"format": retention.MARKER_FORMAT, "row_count": 2}
     assert pl.read_parquet(parquet).to_dicts() == rows
 
     def boom(got, path):
@@ -69,10 +70,10 @@ def test_drop_after_marker_calls_the_deleter_only_for_a_positive_count(tmp_path)
 
     marker = tmp_path / "_markers" / "telemetry-2026-04-14.ok"
     marker.parent.mkdir()
-    marker.write_text("2")
+    marker.write_text(json.dumps({"format": retention.MARKER_FORMAT, "row_count": 2}))
     assert drop_after_marker(marker, delete=delete) == 2
     assert calls == [2]
-    assert marker.read_text() == "2"
+    assert json.loads(marker.read_text()) == {"format": retention.MARKER_FORMAT, "row_count": 2}
 
     calls.clear()
     assert drop_after_marker(tmp_path / "missing.ok", delete=delete) is None
@@ -184,7 +185,7 @@ retention.export_for_drop([{"id": 1}], table="events", range_key="day", write=pa
 
     assert not Path(previous["marker"]).exists()
     retry = export_for_drop([{"id": 1}, {"id": 2}], **key, write=write_parquet)
-    assert Path(retry["marker"]).read_text() == "2"
+    assert json.loads(Path(retry["marker"]).read_text()) == {"format": retention.MARKER_FORMAT, "row_count": 2}
 
 
 def test_export_records_submitted_count_when_writer_consumes_batch(tmp_path, monkeypatch):
@@ -203,7 +204,7 @@ def test_export_records_submitted_count_when_writer_consumes_batch(tmp_path, mon
     )
     assert len(written) == 2
     assert result["count"] == 2
-    assert Path(result["marker"]).read_text() == "2"
+    assert json.loads(Path(result["marker"]).read_text()) == {"format": retention.MARKER_FORMAT, "row_count": 2}
     calls = []
     assert drop_after_marker(result["marker"], delete=calls.append) == 2
     assert calls == [2]
@@ -256,3 +257,31 @@ def test_success_without_new_file_cannot_reapprove_previous_export(tmp_path, mon
     assert result is None
     assert not Path(previous["marker"]).exists()
     assert pl.read_parquet(previous["parquet"]).to_dicts() == [{"id": 1}]
+
+
+def test_legacy_marker_requires_a_fresh_verified_export(tmp_path, monkeypatch):
+    monkeypatch.setattr(retention, "LAKE_ROOT", tmp_path)
+    marker = tmp_path / "_markers" / "events-day.ok"
+    marker.parent.mkdir()
+    marker.write_text("2")
+    calls = []
+    assert drop_after_marker(marker, delete=calls.append) is None
+    assert calls == []
+
+    export_for_drop([{"id": 1}], table="events", range_key="day", write=write_parquet)
+    assert drop_after_marker(marker, delete=calls.append) == 1
+    assert calls == [1]
+
+
+def test_invalid_marker_records_do_not_authorize_delete(tmp_path):
+    marker = tmp_path / "day.ok"
+    calls = []
+    for record in (
+        {"format": "unknown", "row_count": 2},
+        {"format": retention.MARKER_FORMAT},
+        *({"format": retention.MARKER_FORMAT, "row_count": value}
+          for value in (True, 2.0, "2", 0, -1)),
+    ):
+        marker.write_text(json.dumps(record))
+        assert drop_after_marker(marker, delete=calls.append) is None
+    assert calls == []

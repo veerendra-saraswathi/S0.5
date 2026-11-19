@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from datetime import datetime, timezone
 from uuid import uuid4
 
@@ -21,7 +22,9 @@ def test_export_writes_one_parquet_per_table(tmp_path):
     repos.telemetry.insert(asset_id, WHEN, 17.4, 78.5, 40.0, 10.0, 5.0, 90.0, "mission", "auto")
     repos.telemetry.insert(other_id, WHEN, 1.0, 2.0, 3.0, 0.0, 0.0, 50.0, "idle", "manual")
     repos.commands.insert(f"cmd-{uuid4()}", asset_id, "goto", {"lat": 17.4}, "operator-1", WHEN)
-    repos.events.insert(f"evt-{uuid4()}", WHEN, "command", "goto", asset_id, "info", {"reason": "demo"})
+    event_id = f"evt-{uuid4()}"
+    event_data = {"source": "archive-test", "sequence": 3}
+    repos.events.insert(event_id, WHEN, "command", "goto", asset_id, "info", event_data)
     repos.alerts.insert(f"alt-{uuid4()}", WHEN, asset_id, "warning", "zone", {"zone_id": "z"})
 
     result = write_after_action(mission_id, [asset_id], tmp_path / mission_id)
@@ -39,7 +42,12 @@ def test_export_writes_one_parquet_per_table(tmp_path):
     assert commands.height == 1
     assert commands["command_type"][0] == "goto"
     assert events.height == 1
-    assert "demo" in events["data"][0]
+    event = events.row(0, named=True)
+    assert event["event_id"] == event_id
+    assert datetime.fromisoformat(event["time"]) == WHEN
+    assert event["asset_id"] == asset_id
+    assert event["mission_id"] == mission_id
+    assert json.loads(event["data"]) == event_data
     assert alerts.height == 1
     assert alerts["level"][0] == "warning"
 

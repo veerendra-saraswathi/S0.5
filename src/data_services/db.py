@@ -71,6 +71,8 @@ class CNCDatabase:
         self.db_path = db_path
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self.con = duckdb.connect(str(self.db_path))
+        # TIMESTAMP columns store UTC wall time. Cast aware inputs in UTC.
+        self.con.execute("SET TimeZone = 'UTC'")
         self._create_tables()
         logger.info(f"CNC Database ready → {self.db_path}")
 

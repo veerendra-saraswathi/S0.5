@@ -26,7 +26,7 @@ python client-review/archive_demo.py
 
 The script creates a temporary DuckDB database, inserts two labeled sample events and calls the repository's Parquet exporter twice. It opens the first manifest again and checks that it still returns only `sample-A`. The latest manifest must return both `sample-A` and `sample-B`. Generation identifiers vary on each run. The script disables MinIO upload, uses no client records, and removes its temporary database and files when it exits.
 
-If the environment is unavailable, use the PDF and offline viewer and describe the archive segment as a previously rehearsed demonstration. For the remote storage result, say “After a second export became current, we reopened the first by its generation ID on live MinIO and verified all four original files byte for byte. Both exports contained zero data rows.” The [tracker](../docs/PROBLEM_7_PROGRESS.md) records the test revision and result.
+If the environment is unavailable, use the PDF and offline viewer and describe the archive segment as a previously rehearsed demonstration. For the remote storage result, say “After a second export became current, we reopened the first by its generation ID on live MinIO and verified all four original files byte for byte. The current export contained events A and B. The first export still contained only event A.” The [tracker](../docs/PROBLEM_7_PROGRESS.md) records the test revision and result.
 
 ## Questions to settle before acceptance
 

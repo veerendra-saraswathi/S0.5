@@ -55,3 +55,7 @@ developer's Mac. The current manifest identified the second generation. The
 reader then reopened the first generation by ID and verified the manifest and
 all four original Parquet files byte for byte. Both exports contained zero data
 rows. The four-asset acceptance status is unchanged.
+
+At commit `5f29dea`, the live MinIO test passed on the developer's Mac
+in 12.93 seconds with nonempty event data. The current export contained
+events A and B. The original generation still contained only A.

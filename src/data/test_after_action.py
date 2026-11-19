@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from uuid import uuid4
 
 import polars as pl
+import pyarrow.parquet as pq
 
 from src.data.after_action import write_after_action
 from src.data_services.repositories import get_repositories
@@ -60,3 +61,11 @@ def test_export_writes_an_empty_schema(tmp_path):
         assert frame.height == 0
         assert "mission_id" in frame.columns
         assert "asset_id" in frame.columns
+
+
+def test_event_archive_declares_scope_even_when_empty(tmp_path):
+    result = write_after_action("empty-archive", [], tmp_path)
+    metadata = pq.read_metadata(result["files"]["events"]).metadata
+    assert metadata[b"samanvaya.archive.schema"] == b"events.v1"
+    assert metadata[b"samanvaya.archive.mission_id_source"] == b"export_request"
+    assert metadata[b"samanvaya.archive.selection"] == b"asset_id"

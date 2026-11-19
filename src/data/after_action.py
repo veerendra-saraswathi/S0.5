@@ -13,6 +13,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import polars as pl
+import pyarrow.parquet as pq
 
 from src.data_services.repositories import get_repositories
 
@@ -204,7 +205,18 @@ def write_after_action(
     files: dict[str, str] = {}
     for name in TABLES:
         path = dest / f"{name}.parquet"
-        _frame(mission_id, name, collected[name]).write_parquet(path)
+        frame = _frame(mission_id, name, collected[name])
+        if name == "events":
+            table = frame.to_arrow()
+            metadata = dict(table.schema.metadata or {})
+            metadata.update({
+                b"samanvaya.archive.schema": b"events.v1",
+                b"samanvaya.archive.mission_id_source": b"export_request",
+                b"samanvaya.archive.selection": b"asset_id",
+            })
+            pq.write_table(table.replace_schema_metadata(metadata), path, compression="zstd")
+        else:
+            frame.write_parquet(path)
         files[name] = str(path)
     uploaded = False
     try:

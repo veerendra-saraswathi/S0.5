@@ -1,67 +1,31 @@
-# CNC kernel pack
+# Samanvaya 0.5
 
-Drop these files onto https://github.com/veerendra-saraswathi/cnc  
-Do not replace `src/operator_app`, `src/command_control`, or simulations. This pack **names** the platform and maps the RCI EOI onto code you already have.
+EGurukulApps is developing Samanvaya 0.5 for Problem 7, a unified operator interface for heterogeneous assets. The simulation proof of concept brought two UAVs and two UGVs onto one dashboard. The team is preparing the MVP for a witnessed review.
 
-## What you already have
+## Client review
 
-Layered Python prototype matching the EOI:
-
-| EOI layer | Existing path |
+| Start here | What you can do |
 |---|---|
-| Asset integration | `src/asset_integration/models.py` |
-| Communication | `src/communication/mqtt_client.py` |
-| Data & services | `src/data_services/` |
-| AI & fusion | `src/ai_fusion/` |
-| Command & control | `src/command_control/` |
-| Operator app | `src/operator_app/` |
-| Security | `src/security/` (stub) |
-| Demo assets | `simulations/` |
+| [MVP review deck](client-review/Samanvaya_05_MVP_Review.pptx) · [PDF](client-review/Samanvaya_05_MVP_Review.pdf) | Review the scope, historical results, archive tests and proposed acceptance decisions. |
+| [Offline fleet viewer](client-review/Recorded_Fleet_Review.html) | Download and open the HTML file in a browser. Expand the recorded runs to compare the fleet labels and outcomes. |
+| [Eight-minute walkthrough](client-review/Presenter_Guide.md) | Rehearse the evidence review and run a live local archive demonstration. |
+| [Problem 7 delivery tracker](docs/PROBLEM_7_PROGRESS.md) | Inspect completion evidence and remaining handover items. |
 
-That is the **Lattice-shaped year-1 product**: 2 UAV + 2 UGV, one map, one operator, commands out.
+## Evidence at 20 November 2026
 
-Gotham / Foundry are the **growth path**, not the 12-month demo:
+| Evidence | Result | Scope |
+|---|---|---|
+| [M5](docs/acceptance_m5.json) | 4/4 | Historical in-process simulation on a clean revision |
+| [M7](docs/acceptance_m7.json) | 2/4 | Historical software-in-the-loop fleet profile with local changes |
+| [Candidate ac87a6c](docs/fleet_dashboard_regression_20261119_ac87a6c.json) | 4/4 regression checks | Fleet configuration, adapter identity and telemetry, opening dashboard labels and a subsequent WebSocket frame |
 
-- Gotham = objects + links + map + timeline + provenance (ontology).
-- Foundry = same objects become the company operating system later.
-- Lattice = live mesh of assets. You are building this first because the EOI requires it.
+A comparable four-criterion acceptance result for candidate `ac87a6c` remains outstanding. The team's approximate 65% MVP capability estimate is an internal planning judgment.
 
-## Install this pack
+## Engineering references
 
-```bash
-cd ~/src   # or wherever you keep repos
-git clone https://github.com/veerendra-saraswathi/cnc.git
-cd cnc
+- [Requirements trace](docs/EOI_TRACE.md)
+- [Architecture](docs/ARCHITECTURE.md)
+- [Data and archive design](docs/ARCHITECTURE_DATA.md)
+- [Historical test report](docs/TEST_REPORT.md)
 
-# copy the unzipped pack over the repo root
-# (README.md, AGENTS.md, docs/, src/kernel/)
-
-git checkout -b kernel
-git add README.md AGENTS.md docs src/kernel
-git commit -m "Add platform kernel: ontology, EOI trace, agent rules"
-git push -u origin kernel
-```
-
-Then open a PR into `main`. Or merge locally if you are still solo.
-
-## Run what exists today
-
-```bash
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-# start the operator app the way you already do; typical:
-uvicorn src.operator_app.app:app --reload --host 127.0.0.1 --port 8000
-```
-
-Use Grok Build *inside this folder* (`grok`). Read `AGENTS.md` first. Plan mode on.
-
-## Non-goals for the 12-month EOI
-
-- Rebuilding Palantir Foundry
-- Classified multi-tenant ontology studio
-- Training foundation models
-- Real weapons release
-- Every connector on earth
-
-Year 1 acceptance is in `docs/EOI_TRACE.md` section 10.
+To summarize the saved reports from the repository root, run `python3 scripts/evaluate_progress.py`.

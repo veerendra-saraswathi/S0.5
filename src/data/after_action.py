@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
+from uuid import uuid4
 from datetime import datetime, timezone
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -170,7 +172,7 @@ def _frame(mission_id: str, name: str, rows: list[dict]) -> pl.DataFrame:
     return pl.DataFrame(records, schema=schema)
 
 
-def _upload(files: dict[str, str], mission_id: str) -> bool:
+def _upload(files: dict[str, str], mission_id: str, manifest: Path, relative: Path) -> bool:
     endpoint = os.environ.get("MINIO_ENDPOINT", "").strip()
     if not endpoint:
         return False
@@ -189,7 +191,10 @@ def _upload(files: dict[str, str], mission_id: str) -> bool:
     if not client.bucket_exists(bucket):
         client.make_bucket(bucket)
     for path in sorted(files.values()):
-        client.fput_object(bucket, f"{mission_id}/{Path(path).name}", path)
+        name = Path(path).name
+        client.fput_object(bucket, f"{mission_id}/{relative.as_posix()}/{name}", path)
+        client.fput_object(bucket, f"{mission_id}/{name}", path)
+    client.fput_object(bucket, f"{mission_id}/manifest.json", str(manifest))
     return True
 
 
@@ -203,11 +208,19 @@ def write_after_action(
     dest = Path(folder) if folder is not None else Path("data/after_action") / safe
     dest.mkdir(parents=True, exist_ok=True)
     collected = _collect(list(asset_ids or []))
-    files = {name: str(dest / f"{name}.parquet") for name in TABLES}
+    generation = uuid4().hex
+    relative = Path("generations") / generation
+    published = dest / relative
+    published.parent.mkdir(exist_ok=True)
+    entries = {name: (relative / f"{name}.parquet").as_posix() for name in TABLES}
+    files = {name: str(dest / entry) for name, entry in entries.items()}
+    manifest = {"version": 1, "generation": generation, "mission_id": mission_id, "files": entries}
     with TemporaryDirectory(dir=dest, prefix=".export-") as temporary:
         staging = Path(temporary)
+        archive = staging / "archive"
+        archive.mkdir()
         for name in TABLES:
-            path = staging / f"{name}.parquet"
+            path = archive / f"{name}.parquet"
             frame = _frame(mission_id, name, collected[name])
             if name == "events":
                 table = frame.to_arrow()
@@ -220,16 +233,25 @@ def write_after_action(
                 pq.write_table(table.replace_schema_metadata(metadata), path, compression="zstd")
             else:
                 frame.write_parquet(path)
-        for name, destination in files.items():
-            (staging / f"{name}.parquet").replace(destination)
-    uploaded = False
+        descriptor = archive / "manifest.json"
+        descriptor.write_text(json.dumps(manifest), encoding="utf-8")
+        # Legacy paths remain independently writable without changing a pinned generation.
+        for name in TABLES:
+            shutil.copyfile(archive / f"{name}.parquet", staging / f"{name}.parquet")
+        shutil.copyfile(descriptor, staging / "manifest.json")
+        archive.rename(published)
+        for name in TABLES:
+            (staging / f"{name}.parquet").replace(dest / f"{name}.parquet")
+        (staging / "manifest.json").replace(dest / "manifest.json")
     try:
-        uploaded = _upload(files, safe)
+        uploaded = _upload(files, safe, published / "manifest.json", relative)
     except Exception:
         uploaded = False
     return {
         "mission_id": mission_id,
         "folder": str(dest),
+        "generation": generation,
+        "manifest": str(published / "manifest.json"),
         "files": files,
         "uploaded": uploaded,
     }

@@ -1157,3 +1157,19 @@ Each PR is independently reviewable. None of them require Postgres, NATS, or Red
 - **Files / components:** `scripts/migrate_to_postgres.py` (new).
 - **Dependencies:** PR 4. Run only while the app is stopped. Not imported by the 92 tests.
 - **Description:** Idempotent copy from the Data Model Changes section. DuckDB command rows get `status = 'sent'`. Naive timestamps are UTC. `created_at` on assets and missions is preserved. Historical short ids are not rewritten. Historical `issued_by` / `operator_id` values of `operator:op-1` are not rewritten to `operator-1`. Mission tasking stays `issued_by="mission"`. SQLite observations are counted and skipped. Parquet is not loaded unless `--include-parquet` is passed. Source files are not deleted. There is no reverse script. Re-running is `ON CONFLICT` / upsert, safe after a crash mid-copy, and still requires the writer to be stopped so the final pass is complete. This script does not change `stamp()` and does not add a fail-open switch. A failed command Event write still raises `ProvenanceError` before dispatch.
+
+### Reading a consistent after-action archive
+
+Read `manifest.json` once from the archive folder (or the mission prefix in MinIO).
+Resolve all four entries in its `files` mapping relative to that same archive root.
+Keep that mapping until the read finishes. Version 1 manifests carry a generation ID
+and refer to generation-specific Parquet paths. Each export also returns its pinned
+manifest path and generation-specific file paths. The pinned manifest uses the same
+archive-root-relative entries as the current manifest.
+
+Publication replaces the local manifest after all four files are ready. MinIO
+receives the current manifest after the data uploads succeed. Root-level Parquet
+names remain available to older readers. Readers that open these names independently
+can observe different generations during a refresh. Pre-generation archives have
+only these legacy paths. Generations accumulate until a retention policy is defined.
+This contract covers file publication; source queries run separately for each table.

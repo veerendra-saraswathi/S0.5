@@ -77,6 +77,7 @@ def test_failed_refresh_preserves_published_files(tmp_path, monkeypatch):
     monkeypatch.delenv("MINIO_ENDPOINT", raising=False)
     result = write_after_action("archive", [], tmp_path)
     paths = [Path(value) for value in result["files"].values()]
+    contents = set(tmp_path.rglob("*"))
     original = {path: path.read_bytes() for path in paths}
 
     def interrupted(table, destination, **options):
@@ -89,9 +90,9 @@ def test_failed_refresh_preserves_published_files(tmp_path, monkeypatch):
         with pytest.raises(OSError, match="interrupted export"):
             write_after_action("archive", [], tmp_path)
 
-    assert set(tmp_path.iterdir()) == set(paths)
+    assert set(tmp_path.rglob("*")) == contents
     assert all(path.read_bytes() == original[path] for path in paths)
-    assert write_after_action("archive", [], tmp_path)["files"] == result["files"]
+    assert write_after_action("archive", [], tmp_path)["generation"] != result["generation"]
 
 
 def test_upload_includes_only_files_from_current_export(tmp_path, monkeypatch):
@@ -114,6 +115,33 @@ def test_upload_includes_only_files_from_current_export(tmp_path, monkeypatch):
     result = write_after_action("archive", [], tmp_path)
 
     assert result["uploaded"]
-    assert sorted(uploads) == sorted(
-        (f"archive/{name}.parquet", path) for name, path in result["files"].items()
-    )
+    expected = []
+    for name, path in result["files"].items():
+        expected.append((f"archive/generations/{result['generation']}/{name}.parquet", path))
+        expected.append((f"archive/{name}.parquet", path))
+    assert sorted(uploads[:-1]) == sorted(expected)
+    assert uploads[-1] == ("archive/manifest.json", result["manifest"])
+
+
+def test_reader_pinned_before_refresh_finishes_on_original_generation(tmp_path, monkeypatch):
+    from src.data import after_action
+
+    monkeypatch.delenv("MINIO_ENDPOINT", raising=False)
+    monkeypatch.setattr(after_action, "_collect", lambda ids: {
+        name: [{"asset_id": ids[0]}] for name in after_action.TABLES
+    })
+    first = write_after_action("archive", ["old"], tmp_path)
+    manifest = json.loads((tmp_path / "manifest.json").read_text())
+    entries = iter(manifest["files"].values())
+
+    def asset(entry):
+        return pl.read_parquet(tmp_path / entry)["asset_id"].item()
+
+    assert asset(next(entries)) == "old"
+    second = write_after_action("archive", ["new"], tmp_path)
+    assert [asset(entry) for entry in entries] == ["old"] * 3
+    latest = json.loads((tmp_path / "manifest.json").read_text())
+    assert first["generation"] == manifest["generation"] != latest["generation"]
+    assert latest == json.loads(Path(second["manifest"]).read_text())
+    assert all(asset(entry) == "new" for entry in latest["files"].values())
+    assert all(asset(f"{name}.parquet") == "new" for name in latest["files"])

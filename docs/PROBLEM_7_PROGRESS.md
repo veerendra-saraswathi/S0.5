@@ -4,7 +4,7 @@ Baseline reviewed 19 November 2026 at de3d496. PoC demonstrated in simulation.
 MVP capability estimate approximately 65%, by engineering judgment. Formal acceptance pending.
 The estimate applies to S0.5. S1, S2 and S3 have separate scopes.
 
-Run `python3 scripts/evaluate_progress.py` for the two reference runs. Pass one or more
+Run `python3 scripts/evaluate_progress.py` for the two reference acceptance runs and saved fleet dashboard regression reports. Pass one or more
 report paths to evaluate subsequent runs. Compare like profiles. Record the commit,
 worktree state, configuration and date for every run. Inspect missing criteria,
 incomplete runs and the reportable flag before using a result for a milestone.

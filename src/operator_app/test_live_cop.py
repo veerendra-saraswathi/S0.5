@@ -458,3 +458,37 @@ def test_postgis_keep_out_contains_the_interior_point(request):
         assert zone.id not in outside
     finally:
         repos.zones.remove(zone.id)
+
+
+def test_initial_dashboard_labels_after_sim_fleet_registration(tmp_path, monkeypatch):
+    from fastapi import WebSocketDisconnect
+    from src.operator_app import app as operator
+    from src.operator_app.fleet_config import ROOT, load_fleet_adapters
+
+    monkeypatch.setattr(operator, "DB_PATH", tmp_path / "snapshot.db")
+    isolated = operator.Platform()
+    monkeypatch.setattr(operator, "platform", isolated)
+    monkeypatch.setattr("src.operator_app.live_feed.read_redis_overlay", lambda: {})
+    monkeypatch.setattr("src.operator_app.live_feed.zone_rings", lambda: [])
+
+    class FirstFrame(_Socket):
+        async def send_text(self, payload):
+            await super().send_text(payload)
+            raise WebSocketDisconnect()
+
+    async def read_initial_frame():
+        await isolated.db.connect()
+        try:
+            for adapter in load_fleet_adapters(ROOT / "fleet.yaml"):
+                await isolated.register(adapter, start=False)
+            socket = FirstFrame()
+            await asyncio.wait_for(ws_cop(socket), timeout=3)
+            return socket.sent[0]
+        finally:
+            await isolated.db.close()
+
+    frame = asyncio.run(read_initial_frame())
+    assert frame["type"] == "snapshot"
+    assert sorted((card["id"], card["asset_type"]) for card in frame["assets"]) == [
+        ("uav-01", "uav"), ("uav-02", "uav"), ("ugv-01", "ugv"), ("ugv-02", "ugv"),
+    ]

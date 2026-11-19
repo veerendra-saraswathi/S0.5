@@ -38,6 +38,7 @@ if ! "$python_bin" -c 'import minio' 2>/dev/null; then
   "$python_bin" -m pip install --quiet --target "$deps" minio
   export PYTHONPATH="$deps${PYTHONPATH:+:$PYTHONPATH}"
 fi
+export STORAGE_BACKEND=duckdb CNC_DUCKDB_PATH="$deps/readback.duckdb"
 export MINIO_ENDPOINT="$endpoint" MINIO_ACCESS_KEY="$MINIO_ROOT_USER"
 export MINIO_SECRET_KEY="$MINIO_ROOT_PASSWORD" MINIO_SECURE=false S05_TEST_MINIO=1
 "$python_bin" -m pytest -q -rs src/data/test_minio_readback.py::test_read_published_generation

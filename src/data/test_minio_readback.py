@@ -2,12 +2,15 @@
 
 import json
 import os
+from datetime import datetime, timezone
 from pathlib import Path
 from uuid import uuid4
 
+import polars as pl
 import pytest
 
 from src.data.after_action import write_after_action
+from src.data_services.repositories import get_repositories
 
 
 @pytest.mark.skipif(os.getenv("S05_TEST_MINIO") != "1", reason="requires disposable MinIO")
@@ -22,14 +25,24 @@ def test_read_published_generation(tmp_path, monkeypatch):
         secret_key=os.environ["MINIO_SECRET_KEY"],
         secure=os.getenv("MINIO_SECURE", "").lower() in {"1", "true", "yes"},
     )
-    exported = write_after_action("readback", [], tmp_path / "export")
+    asset = f"sample-{uuid4().hex}"
+    events = get_repositories().events
+    first_event, second_event = f"{asset}-A", f"{asset}-B"
+    when = datetime.now(timezone.utc)
+    events.insert(first_event, when, "review", "first", asset, "info", {})
+    exported = write_after_action("readback", [asset], tmp_path / "export")
     assert exported["uploaded"], "archive upload failed"
-    refreshed = write_after_action("readback", [], tmp_path / "export")
+    events.insert(second_event, when, "review", "second", asset, "info", {})
+    refreshed = write_after_action("readback", [asset], tmp_path / "export")
     assert refreshed["uploaded"]
     assert refreshed["generation"] != exported["generation"]
     manifest_path = tmp_path / "downloaded-manifest.json"
     client.fget_object(bucket, "readback/manifest.json", str(manifest_path))
-    assert json.loads(manifest_path.read_text())["generation"] == refreshed["generation"]
+    current = json.loads(manifest_path.read_text())
+    assert current["generation"] == refreshed["generation"]
+    latest_events = tmp_path / "latest-events.parquet"
+    client.fget_object(bucket, f"readback/{current['files']['events']}", str(latest_events))
+    assert sorted(pl.read_parquet(latest_events)["event_id"].to_list()) == [first_event, second_event]
     pinned_key = f"readback/generations/{exported['generation']}/manifest.json"
     pinned_path = tmp_path / "downloaded-first-manifest.json"
     client.fget_object(bucket, pinned_key, str(pinned_path))
@@ -42,3 +55,4 @@ def test_read_published_generation(tmp_path, monkeypatch):
         assert relative == f"generations/{exported['generation']}/{name}.parquet"
         client.fget_object(bucket, f"readback/{relative}", str(downloaded))
         assert downloaded.read_bytes() == Path(exported["files"][name]).read_bytes()
+    assert pl.read_parquet(tmp_path / "events.parquet")["event_id"].to_list() == [first_event]

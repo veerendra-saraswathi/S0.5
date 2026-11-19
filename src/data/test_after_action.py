@@ -146,3 +146,54 @@ def test_reader_pinned_before_refresh_finishes_on_original_generation(tmp_path, 
     assert latest == json.loads(Path(second["manifest"]).read_text())
     assert all(asset(entry) == "new" for entry in latest["files"].values())
     assert all(asset(f"{name}.parquet") == "new" for name in latest["files"])
+
+
+@pytest.mark.parametrize("failure_at", ["events.parquet", "generation manifest", "current manifest"])
+def test_interrupted_upload_preserves_remote_snapshot_and_allows_retry(tmp_path, monkeypatch, failure_at):
+    import sys
+    from types import SimpleNamespace
+
+    objects = {}
+    failures = []
+    interrupt = False
+
+    class Client:
+        def bucket_exists(self, bucket):
+            return True
+
+        def fput_object(self, bucket, key, path):
+            if key == "archive/manifest.json":
+                stage = "current manifest"
+            elif key.endswith("/manifest.json"):
+                stage = "generation manifest"
+            else:
+                stage = key.rsplit("/", 1)[-1]
+            if interrupt and stage == failure_at:
+                failures.append(key)
+                raise OSError("interrupted upload")
+            objects[key] = Path(path).read_bytes()
+
+    monkeypatch.setenv("MINIO_ENDPOINT", "archive.test")
+    monkeypatch.setitem(sys.modules, "minio", SimpleNamespace(Minio=lambda *a, **kw: Client()))
+
+    first = write_after_action("archive", [], tmp_path)
+    assert first["uploaded"]
+    current_key = "archive/manifest.json"
+    original = objects[current_key]
+    pinned = "archive/generations/" + first["generation"] + "/manifest.json"
+
+    interrupt = True
+    failed = write_after_action("archive", [], tmp_path)
+    assert len(failures) == 1
+    assert not failed["uploaded"]
+    assert objects[current_key] == original
+    assert json.loads(Path(failed["manifest"]).read_bytes())["generation"] == failed["generation"]
+
+    interrupt = False
+    retry = write_after_action("archive", [], tmp_path)
+    assert retry["uploaded"]
+    assert json.loads(objects[current_key])["generation"] == retry["generation"]
+    assert objects[pinned] == original
+    for result, manifest_key in [(first, pinned), (retry, current_key)]:
+        for name, entry in json.loads(objects[manifest_key])["files"].items():
+            assert objects[f"archive/{entry}"] == Path(result["files"][name]).read_bytes()

@@ -36,3 +36,16 @@ The PostgreSQL result comes from the developer's local terminal run. A disposabl
 The image digest was `sha256:5d1a6980aa255b5035e24e0de6808c134bf2bf19cf551571acbd092ad38a4b8d`.
 
 A fresh four-asset acceptance result for this candidate remains pending.
+
+## MinIO archive readback on 20 November 2026
+
+At commit `f9d7e29`, the developer ran
+`src/data/test_minio_readback.py::test_read_published_generation` against a
+disposable local MinIO server. Pytest reported **1 passed in 9.78 seconds**.
+The reader downloaded the published manifest and all four Parquet files for
+its generation. Every downloaded file matched the corresponding local file
+byte for byte. The export contained zero data rows.
+
+The Intel Mac ran the linux/amd64 image from the unofficial `jcometki/minio`
+mirror, pinned to digest
+`sha256:a1ea29fa28355559ef137d71fc570e508a214ec84ff8083e39bc5428980b015e`.

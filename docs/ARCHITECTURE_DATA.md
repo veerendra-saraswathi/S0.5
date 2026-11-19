@@ -1168,7 +1168,10 @@ manifest path and generation-specific file paths. The pinned manifest uses the s
 archive-root-relative entries as the current manifest.
 
 Publication replaces the local manifest after all four files are ready. MinIO
-receives the current manifest after the data uploads succeed. Root-level Parquet
+receives `generations/<generation>/manifest.json` after the data uploads succeed,
+then receives the current manifest. A reader can use the generation ID to reopen
+that export after a refresh. Older remote exports may lack the per-generation
+manifest; readers that retained the original manifest can still use its file paths. Root-level Parquet
 names remain available to older readers. Readers that open these names independently
 can observe different generations during a refresh. Pre-generation archives have
 only these legacy paths. Generations accumulate until a retention policy is defined.

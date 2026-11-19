@@ -119,7 +119,8 @@ def test_upload_includes_only_files_from_current_export(tmp_path, monkeypatch):
     for name, path in result["files"].items():
         expected.append((f"archive/generations/{result['generation']}/{name}.parquet", path))
         expected.append((f"archive/{name}.parquet", path))
-    assert sorted(uploads[:-1]) == sorted(expected)
+    assert sorted(uploads[:-2]) == sorted(expected)
+    assert uploads[-2] == (f"archive/generations/{result['generation']}/manifest.json", result["manifest"])
     assert uploads[-1] == ("archive/manifest.json", result["manifest"])
 
 

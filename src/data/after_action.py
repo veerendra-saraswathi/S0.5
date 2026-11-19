@@ -203,6 +203,7 @@ def _upload(files: dict[str, str], mission_id: str, manifest: Path, relative: Pa
         name = Path(path).name
         client.fput_object(bucket, f"{mission_id}/{relative.as_posix()}/{name}", path)
         client.fput_object(bucket, f"{mission_id}/{name}", path)
+    client.fput_object(bucket, f"{mission_id}/{relative.as_posix()}/manifest.json", str(manifest))
     client.fput_object(bucket, f"{mission_id}/manifest.json", str(manifest))
     return True
 

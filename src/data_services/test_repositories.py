@@ -531,3 +531,33 @@ def test_postgres_snapshot_round_trip(request):
     match = next(item for item in loaded if item.id == "snap-roundtrip")
     assert match.name == "Snap"
     assert match.lat == pytest.approx(17.4)
+
+
+def test_archive_collection_pins_one_source_snapshot(repos, tmp_path, monkeypatch):
+    from src.data import after_action
+    import polars as pl
+
+    monkeypatch.delenv("MINIO_ENDPOINT", raising=False)
+    monkeypatch.setattr(after_action, "get_repositories", lambda: repos)
+    asset = "archive-snapshot-test"
+    helper = "_fetch_postgres" if repos.backend == "postgres" else "_fetch_duck"
+    fetch = getattr(after_action, helper)
+    reads = 0
+
+    def fetch_with_interleaved_write(*args):
+        nonlocal reads
+        rows = fetch(*args)
+        reads += 1
+        if reads == 2:
+            repos.events.insert("snapshot-event", WHEN, "info", "sample", asset, "info", {})
+            repos.alerts.insert("snapshot-alert", WHEN, asset, "info", "sample", {})
+        return rows
+
+    monkeypatch.setattr(after_action, helper, fetch_with_interleaved_write)
+
+    def counts():
+        archive = after_action.write_after_action("archive", [asset], tmp_path)
+        return {name: pl.read_parquet(path).height for name, path in archive["files"].items()}
+
+    assert counts() == {"telemetry": 0, "commands": 0, "events": 0, "alerts": 0}
+    assert counts() == {"telemetry": 0, "commands": 0, "events": 1, "alerts": 1}

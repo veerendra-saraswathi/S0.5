@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
+from contextlib import closing
 from uuid import uuid4
 from datetime import datetime, timezone
 from pathlib import Path
@@ -130,13 +131,11 @@ def _fetch_duck(con, sql: str, asset_ids: list[str]) -> list[dict]:
     return [dict(zip(names, row)) for row in cursor.fetchall()]
 
 
-def _fetch_postgres(repos, sql: str, asset_ids: list[str]) -> list[dict]:
-    binds = {f"a{index}": asset_id for index, asset_id in enumerate(asset_ids)}
+def _fetch_postgres(conn, sql: str, binds: dict[str, str]) -> list[dict]:
     from sqlalchemy import text
 
-    with repos.engine.connect() as conn:
-        rows = conn.execute(text(sql), binds).mappings()
-        return [dict(row) for row in rows]
+    rows = conn.execute(text(sql), binds).mappings()
+    return [dict(row) for row in rows]
 
 
 def _collect(asset_ids: list[str]) -> dict[str, list[dict]]:
@@ -145,16 +144,26 @@ def _collect(asset_ids: list[str]) -> dict[str, list[dict]]:
         return empty
     repos = get_repositories()
     if getattr(repos, "backend", "") == "postgres":
-        marks = ", ".join(f":a{index}" for index in range(len(asset_ids)))
-        return {
-            name: _fetch_postgres(repos, sql.format(marks=marks), asset_ids)
-            for name, sql in _POSTGRES.items()
-        }
+        binds = {f"a{index}": asset_id for index, asset_id in enumerate(asset_ids)}
+        marks = ", ".join(f":{key}" for key in binds)
+        with repos.engine.connect() as conn:
+            conn.execution_options(isolation_level="REPEATABLE READ")
+            with conn.begin():
+                return {
+                    name: _fetch_postgres(conn, sql.format(marks=marks), binds)
+                    for name, sql in _POSTGRES.items()
+                }
+
     marks = ", ".join("?" for _ in asset_ids)
-    return {
-        name: _fetch_duck(repos.database.con, sql.format(marks=marks), asset_ids)
-        for name, sql in _DUCK.items()
-    }
+    # A child cursor has its own transaction, independent of repository writers.
+    with closing(repos.database.con.cursor()) as reader:
+        reader.execute("BEGIN TRANSACTION")
+        rows = {
+            name: _fetch_duck(reader, sql.format(marks=marks), asset_ids)
+            for name, sql in _DUCK.items()
+        }
+        reader.execute("COMMIT")
+    return rows
 
 
 def _frame(mission_id: str, name: str, rows: list[dict]) -> pl.DataFrame:

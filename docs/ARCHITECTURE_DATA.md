@@ -1172,4 +1172,4 @@ receives the current manifest after the data uploads succeed. Root-level Parquet
 names remain available to older readers. Readers that open these names independently
 can observe different generations during a refresh. Pre-generation archives have
 only these legacy paths. Generations accumulate until a retention policy is defined.
-This contract covers file publication; source queries run separately for each table.
+Each export also reads the four source tables in one database snapshot. DuckDB uses a dedicated reader transaction. PostgreSQL uses one repeatable-read transaction. Collection finishes before Parquet encoding and upload.

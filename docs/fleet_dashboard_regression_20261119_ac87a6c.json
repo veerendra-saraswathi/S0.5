@@ -1,0 +1,28 @@
+{
+  "profile": "in-process simulation, fleet and dashboard regression tests",
+  "commit": "ac87a6cde5198b288a220fc38a98beadd64ae139",
+  "recorded_at": "2026-11-19T18:30:18.304142+00:00",
+  "scope": "Four separate regression checks. No end-to-end M5 criteria scored.",
+  "tests": [
+    {
+      "name": "test_default_fleet_is_four_sim_assets",
+      "result": "passed",
+      "seconds": 0.063
+    },
+    {
+      "name": "test_demo_fleet_ids_homes_and_bus_subjects",
+      "result": "passed",
+      "seconds": 0.041
+    },
+    {
+      "name": "test_initial_dashboard_labels_after_sim_fleet_registration",
+      "result": "passed",
+      "seconds": 0.058
+    },
+    {
+      "name": "test_websocket_pushes_the_next_frame",
+      "result": "passed",
+      "seconds": 0.068
+    }
+  ]
+}

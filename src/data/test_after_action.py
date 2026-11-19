@@ -92,3 +92,28 @@ def test_failed_refresh_preserves_published_files(tmp_path, monkeypatch):
     assert set(tmp_path.iterdir()) == set(paths)
     assert all(path.read_bytes() == original[path] for path in paths)
     assert write_after_action("archive", [], tmp_path)["files"] == result["files"]
+
+
+def test_upload_includes_only_files_from_current_export(tmp_path, monkeypatch):
+    import sys
+    from types import SimpleNamespace
+
+    uploads = []
+
+    class Client:
+        def bucket_exists(self, bucket):
+            return True
+
+        def fput_object(self, bucket, key, path):
+            uploads.append((key, path))
+
+    monkeypatch.setenv("MINIO_ENDPOINT", "archive.test")
+    monkeypatch.setitem(sys.modules, "minio", SimpleNamespace(Minio=lambda *a, **kw: Client()))
+    (tmp_path / "previous.parquet").write_bytes(b"previous job")
+
+    result = write_after_action("archive", [], tmp_path)
+
+    assert result["uploaded"]
+    assert sorted(uploads) == sorted(
+        (f"archive/{name}.parquet", path) for name, path in result["files"].items()
+    )

@@ -170,7 +170,7 @@ def _frame(mission_id: str, name: str, rows: list[dict]) -> pl.DataFrame:
     return pl.DataFrame(records, schema=schema)
 
 
-def _upload(folder: Path, mission_id: str) -> bool:
+def _upload(files: dict[str, str], mission_id: str) -> bool:
     endpoint = os.environ.get("MINIO_ENDPOINT", "").strip()
     if not endpoint:
         return False
@@ -188,8 +188,8 @@ def _upload(folder: Path, mission_id: str) -> bool:
     bucket = os.environ.get("MINIO_BUCKET", "cnc-after-action")
     if not client.bucket_exists(bucket):
         client.make_bucket(bucket)
-    for path in sorted(folder.glob("*.parquet")):
-        client.fput_object(bucket, f"{mission_id}/{path.name}", str(path))
+    for path in sorted(files.values()):
+        client.fput_object(bucket, f"{mission_id}/{Path(path).name}", path)
     return True
 
 
@@ -224,7 +224,7 @@ def write_after_action(
             (staging / f"{name}.parquet").replace(destination)
     uploaded = False
     try:
-        uploaded = _upload(dest, safe)
+        uploaded = _upload(files, safe)
     except Exception:
         uploaded = False
     return {

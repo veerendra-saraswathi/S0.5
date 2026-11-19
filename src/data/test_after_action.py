@@ -17,7 +17,8 @@ from src.data_services.repositories import get_repositories
 WHEN = datetime(2026, 10, 12, 15, 0, tzinfo=timezone.utc)
 
 
-def test_export_writes_one_parquet_per_table(tmp_path):
+def test_export_writes_one_parquet_per_table(tmp_path, monkeypatch):
+    monkeypatch.delenv("MINIO_ENDPOINT", raising=False)
     asset_id = f"export-{uuid4()}"
     other_id = f"export-other-{uuid4()}"
     mission_id = f"mission-{uuid4()}"
@@ -31,6 +32,7 @@ def test_export_writes_one_parquet_per_table(tmp_path):
     repos.alerts.insert(f"alt-{uuid4()}", WHEN, asset_id, "warning", "zone", {"zone_id": "z"})
 
     result = write_after_action(mission_id, [asset_id], tmp_path / mission_id)
+    assert result["upload_status"] == "not_configured"
     assert result["uploaded"] is False
     assert set(result["files"]) == {"telemetry", "commands", "events", "alerts"}
 
@@ -185,15 +187,29 @@ def test_interrupted_upload_preserves_remote_snapshot_and_allows_retry(tmp_path,
     interrupt = True
     failed = write_after_action("archive", [], tmp_path)
     assert len(failures) == 1
+    assert failed["upload_status"] == "failed"
     assert not failed["uploaded"]
     assert objects[current_key] == original
     assert json.loads(Path(failed["manifest"]).read_bytes())["generation"] == failed["generation"]
 
     interrupt = False
     retry = write_after_action("archive", [], tmp_path)
+    assert retry["upload_status"] == "uploaded"
     assert retry["uploaded"]
     assert json.loads(objects[current_key])["generation"] == retry["generation"]
     assert objects[pinned] == original
     for result, manifest_key in [(first, pinned), (retry, current_key)]:
         for name, entry in json.loads(objects[manifest_key])["files"].items():
             assert objects[f"archive/{entry}"] == Path(result["files"][name]).read_bytes()
+
+
+def test_configured_upload_without_minio_client_keeps_local_export(tmp_path, monkeypatch):
+    import sys
+
+    monkeypatch.setenv("MINIO_ENDPOINT", "archive.test")
+    monkeypatch.setitem(sys.modules, "minio", None)
+    result = write_after_action("archive", [], tmp_path)
+    assert result["upload_status"] == "client_unavailable"
+    assert result["uploaded"] is False
+    assert Path(result["manifest"]).is_file()
+    assert all(Path(path).is_file() for path in result["files"].values())

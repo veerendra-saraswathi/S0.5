@@ -181,14 +181,14 @@ def _frame(mission_id: str, name: str, rows: list[dict]) -> pl.DataFrame:
     return pl.DataFrame(records, schema=schema)
 
 
-def _upload(files: dict[str, str], mission_id: str, manifest: Path, relative: Path) -> bool:
+def _upload(files: dict[str, str], mission_id: str, manifest: Path, relative: Path) -> str:
     endpoint = os.environ.get("MINIO_ENDPOINT", "").strip()
     if not endpoint:
-        return False
+        return "not_configured"
     try:
         from minio import Minio
     except ImportError:
-        return False
+        return "client_unavailable"
     secure = os.environ.get("MINIO_SECURE", "").lower() in {"1", "true", "yes"}
     client = Minio(
         endpoint,
@@ -205,7 +205,7 @@ def _upload(files: dict[str, str], mission_id: str, manifest: Path, relative: Pa
         client.fput_object(bucket, f"{mission_id}/{name}", path)
     client.fput_object(bucket, f"{mission_id}/{relative.as_posix()}/manifest.json", str(manifest))
     client.fput_object(bucket, f"{mission_id}/manifest.json", str(manifest))
-    return True
+    return "uploaded"
 
 
 def write_after_action(
@@ -254,14 +254,15 @@ def write_after_action(
             (staging / f"{name}.parquet").replace(dest / f"{name}.parquet")
         (staging / "manifest.json").replace(dest / "manifest.json")
     try:
-        uploaded = _upload(files, safe, published / "manifest.json", relative)
+        upload_status = _upload(files, safe, published / "manifest.json", relative)
     except Exception:
-        uploaded = False
+        upload_status = "failed"
     return {
         "mission_id": mission_id,
         "folder": str(dest),
         "generation": generation,
         "manifest": str(published / "manifest.json"),
         "files": files,
-        "uploaded": uploaded,
+        "uploaded": upload_status == "uploaded",
+        "upload_status": upload_status,
     }

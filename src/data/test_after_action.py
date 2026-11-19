@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import json
 from datetime import datetime, timezone
+from pathlib import Path
 from uuid import uuid4
 
+import pytest
 import polars as pl
 import pyarrow.parquet as pq
 
@@ -69,3 +71,24 @@ def test_event_archive_declares_scope_even_when_empty(tmp_path):
     assert metadata[b"samanvaya.archive.schema"] == b"events.v1"
     assert metadata[b"samanvaya.archive.mission_id_source"] == b"export_request"
     assert metadata[b"samanvaya.archive.selection"] == b"asset_id"
+
+
+def test_failed_refresh_preserves_published_files(tmp_path, monkeypatch):
+    monkeypatch.delenv("MINIO_ENDPOINT", raising=False)
+    result = write_after_action("archive", [], tmp_path)
+    paths = [Path(value) for value in result["files"].values()]
+    original = {path: path.read_bytes() for path in paths}
+
+    def interrupted(table, destination, **options):
+        Path(destination).write_bytes(b"incomplete")
+        assert all(path.read_bytes() == original[path] for path in paths)
+        raise OSError("interrupted export")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(pq, "write_table", interrupted)
+        with pytest.raises(OSError, match="interrupted export"):
+            write_after_action("archive", [], tmp_path)
+
+    assert set(tmp_path.iterdir()) == set(paths)
+    assert all(path.read_bytes() == original[path] for path in paths)
+    assert write_after_action("archive", [], tmp_path)["files"] == result["files"]

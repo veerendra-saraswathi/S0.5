@@ -11,6 +11,7 @@ import json
 import os
 from datetime import datetime, timezone
 from pathlib import Path
+from tempfile import TemporaryDirectory
 
 import polars as pl
 import pyarrow.parquet as pq
@@ -202,22 +203,25 @@ def write_after_action(
     dest = Path(folder) if folder is not None else Path("data/after_action") / safe
     dest.mkdir(parents=True, exist_ok=True)
     collected = _collect(list(asset_ids or []))
-    files: dict[str, str] = {}
-    for name in TABLES:
-        path = dest / f"{name}.parquet"
-        frame = _frame(mission_id, name, collected[name])
-        if name == "events":
-            table = frame.to_arrow()
-            metadata = dict(table.schema.metadata or {})
-            metadata.update({
-                b"samanvaya.archive.schema": b"events.v1",
-                b"samanvaya.archive.mission_id_source": b"export_request",
-                b"samanvaya.archive.selection": b"asset_id",
-            })
-            pq.write_table(table.replace_schema_metadata(metadata), path, compression="zstd")
-        else:
-            frame.write_parquet(path)
-        files[name] = str(path)
+    files = {name: str(dest / f"{name}.parquet") for name in TABLES}
+    with TemporaryDirectory(dir=dest, prefix=".export-") as temporary:
+        staging = Path(temporary)
+        for name in TABLES:
+            path = staging / f"{name}.parquet"
+            frame = _frame(mission_id, name, collected[name])
+            if name == "events":
+                table = frame.to_arrow()
+                metadata = dict(table.schema.metadata or {})
+                metadata.update({
+                    b"samanvaya.archive.schema": b"events.v1",
+                    b"samanvaya.archive.mission_id_source": b"export_request",
+                    b"samanvaya.archive.selection": b"asset_id",
+                })
+                pq.write_table(table.replace_schema_metadata(metadata), path, compression="zstd")
+            else:
+                frame.write_parquet(path)
+        for name, destination in files.items():
+            (staging / f"{name}.parquet").replace(destination)
     uploaded = False
     try:
         uploaded = _upload(dest, safe)

@@ -200,3 +200,27 @@ def test_export_records_submitted_count_when_writer_consumes_batch(tmp_path, mon
     calls = []
     assert drop_after_marker(result["marker"], delete=calls.append) == 2
     assert calls == [2]
+
+
+def test_retention_marker_matches_rows_read_back_from_parquet(tmp_path, monkeypatch):
+    from pathlib import Path
+
+    import polars as pl
+
+    monkeypatch.setattr(retention, "LAKE_ROOT", tmp_path)
+    rows = [{"id": 10}, {"id": 20}, {"id": 30}]
+    expected = rows.copy()
+
+    def write(batch, destination):
+        path = Path(destination)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        pl.DataFrame(batch).write_parquet(path)
+        batch.clear()
+        return destination
+
+    result = export_for_drop(rows, table="events", range_key="day", write=write)
+    restored = pl.read_parquet(result["parquet"]).to_dicts()
+    assert restored == expected
+    counts = []
+    assert drop_after_marker(result["marker"], delete=counts.append) == len(restored)
+    assert counts == [len(restored)]

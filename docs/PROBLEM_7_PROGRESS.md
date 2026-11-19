@@ -49,3 +49,9 @@ byte for byte. The export contained zero data rows.
 The Intel Mac ran the linux/amd64 image from the unofficial `jcometki/minio`
 mirror, pinned to digest
 `sha256:a1ea29fa28355559ef137d71fc570e508a214ec84ff8083e39bc5428980b015e`.
+
+At `77e72c4`, the two-export MinIO test passed in **5.83 seconds** on the
+developer's Mac. The current manifest identified the second generation. The
+reader then reopened the first generation by ID and verified the manifest and
+all four original Parquet files byte for byte. Both exports contained zero data
+rows. The four-asset acceptance status is unchanged.

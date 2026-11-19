@@ -178,3 +178,25 @@ retention.export_for_drop([{}], table="events", range_key="day", write=paused_wr
     assert not Path(previous["marker"]).exists()
     retry = export_for_drop([{}, {}], **key, write=lambda rows, path: path)
     assert Path(retry["marker"]).read_text() == "2"
+
+
+def test_export_records_submitted_count_when_writer_consumes_batch(tmp_path, monkeypatch):
+    from pathlib import Path
+
+    monkeypatch.setattr(retention, "LAKE_ROOT", tmp_path)
+    written = []
+
+    def write(rows, path):
+        written.extend(rows)
+        rows.clear()
+        return path
+
+    result = export_for_drop(
+        [{"id": 1}, {"id": 2}], table="events", range_key="day", write=write
+    )
+    assert len(written) == 2
+    assert result["count"] == 2
+    assert Path(result["marker"]).read_text() == "2"
+    calls = []
+    assert drop_after_marker(result["marker"], delete=calls.append) == 2
+    assert calls == [2]

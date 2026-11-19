@@ -27,17 +27,18 @@ def export_for_drop(rows: list[dict], *, table: str, range_key: str, write) -> d
     try:
         with _range_lock(marker):
             marker.unlink(missing_ok=True)
-            if not rows or write(rows, parquet) is None:
+            count = len(rows)
+            if not count or write(rows, parquet) is None:
                 return None
             pending = marker.with_suffix(f".{uuid4().hex}.tmp")
             try:
-                pending.write_text(str(len(rows)))
+                pending.write_text(str(count))
                 pending.replace(marker)
             finally:
                 pending.unlink(missing_ok=True)
     except Exception:
         return None
-    return {"marker": str(marker), "count": len(rows), "parquet": parquet}
+    return {"marker": str(marker), "count": count, "parquet": parquet}
 
 
 def drop_after_marker(marker, *, delete) -> int | None:

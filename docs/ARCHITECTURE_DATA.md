@@ -17,7 +17,7 @@
 
 `append_telemetry` still writes one Parquet file per call. `scripts/smoke_data.py` still uses that direct path. `query_recent` binds `platform_id` and `limit`. The Parquet path stays the lake constant.
 
-`export_for_drop` writes `data/lake/_markers/<table>-<range>.ok` after a successful injected write and returns that path, the row count, and the Parquet path. An empty list, a `None` write, or a raised error does not create the marker file.
+The writer passed to `export_for_drop` must write Parquet to the supplied temporary path and return a non-None result on success. Under the range lock, the exporter revokes any old marker, reads the staged file, and checks its row count against the submitted batch size. It replaces the final Parquet file only after that check passes, then publishes the count in `data/lake/_markers/<table>-<range>.ok`. The result contains the marker path, count, and final Parquet path. An empty batch or failed verification leaves the range without a marker.
 
 `drop_after_marker` calls an injected deleter only when that marker file exists and its text is a positive count, and it returns that count. A missing marker, an empty or non-positive marker, or a deleter that raises returns `None`.
 

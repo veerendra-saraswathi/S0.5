@@ -1,7 +1,16 @@
-"""export_for_drop writes a marker file only after the stubbed writer succeeds."""
+"""Retention markers authorize verified Parquet exports."""
+
+from pathlib import Path
+
+import polars as pl
 
 from src.data import retention
 from src.data.retention import drop_after_marker, export_for_drop
+
+
+def write_parquet(rows, destination):
+    pl.DataFrame(rows).write_parquet(destination)
+    return destination
 
 
 def test_export_for_drop_writes_the_marker_only_after_a_successful_write(
@@ -12,18 +21,18 @@ def test_export_for_drop_writes_the_marker_only_after_a_successful_write(
     calls = []
 
     def write(got, path):
-        calls.append((got, path))
-        return "part"
+        calls.append(got)
+        return write_parquet(got, path)
 
     result = export_for_drop(
         rows, table="telemetry", range_key="2026-04-14", write=write
     )
     parquet = str(tmp_path / "telemetry" / "2026-04-14.parquet")
     marker = tmp_path / "_markers" / "telemetry-2026-04-14.ok"
-    assert calls == [(rows, parquet)]
+    assert calls == [rows]
     assert result == {"marker": str(marker), "count": 2, "parquet": parquet}
     assert marker.read_text() == "2"
-    assert not (tmp_path / "telemetry" / "2026-04-14.parquet").exists()
+    assert pl.read_parquet(parquet).to_dicts() == rows
 
     def boom(got, path):
         raise RuntimeError("copy failed")
@@ -82,7 +91,6 @@ def test_drop_after_marker_calls_the_deleter_only_for_a_positive_count(tmp_path)
 
 
 def test_partial_marker_never_authorizes_deletion(tmp_path, monkeypatch):
-    from pathlib import Path
 
     monkeypatch.setattr(retention, "LAKE_ROOT", tmp_path)
     marker = tmp_path / "_markers" / "events-day.ok"
@@ -96,7 +104,7 @@ def test_partial_marker_never_authorizes_deletion(tmp_path, monkeypatch):
 
     monkeypatch.setattr(Path, "write_text", interrupted_write)
     result = export_for_drop(
-        [{}] * 12, table="events", range_key="day", write=lambda rows, path: path
+        [{"id": 1}] * 12, table="events", range_key="day", write=write_parquet
     )
     assert result is None
     assert deletions == []
@@ -106,14 +114,14 @@ def test_partial_marker_never_authorizes_deletion(tmp_path, monkeypatch):
 def test_repeat_export_revokes_old_marker_before_writer_runs(tmp_path, monkeypatch):
     monkeypatch.setattr(retention, "LAKE_ROOT", tmp_path)
     key = {"table": "events", "range_key": "day"}
-    previous = export_for_drop([{}], **key, write=lambda rows, path: path)
+    previous = export_for_drop([{"id": 1}], **key, write=write_parquet)
     calls = []
 
     def failed_write(rows, path):
         drop_after_marker(previous["marker"], delete=calls.append)
         raise OSError("disk full")
 
-    assert export_for_drop([{}, {}], **key, write=failed_write) is None
+    assert export_for_drop([{"id": 1}, {"id": 2}], **key, write=failed_write) is None
     assert drop_after_marker(previous["marker"], delete=calls.append) is None
     assert calls == []
 
@@ -121,25 +129,24 @@ def test_repeat_export_revokes_old_marker_before_writer_runs(tmp_path, monkeypat
 def test_export_cannot_replace_range_during_delete(tmp_path, monkeypatch):
     monkeypatch.setattr(retention, "LAKE_ROOT", tmp_path)
     key = {"table": "events", "range_key": "day"}
-    previous = export_for_drop([{}], **key, write=lambda rows, path: path)
+    previous = export_for_drop([{"id": 1}], **key, write=write_parquet)
     writes = []
 
     def delete(count):
-        assert export_for_drop([{}, {}], **key, write=lambda *args: writes.append(args)) is None
+        assert export_for_drop([{"id": 1}, {"id": 2}], **key, write=lambda *args: writes.append(args)) is None
 
     assert drop_after_marker(previous["marker"], delete=delete) == 1
     assert writes == []
-    assert export_for_drop([{}, {}], **key, write=lambda rows, path: path)["count"] == 2
+    assert export_for_drop([{"id": 1}, {"id": 2}], **key, write=write_parquet)["count"] == 2
 
 
 def test_crashed_export_releases_only_its_range_lock(monkeypatch, tmp_path):
     import subprocess
     import sys
-    from pathlib import Path
 
     monkeypatch.setattr(retention, "LAKE_ROOT", tmp_path)
     key = {"table": "events", "range_key": "day"}
-    previous = export_for_drop([{}], **key, write=lambda rows, path: path)
+    previous = export_for_drop([{"id": 1}], **key, write=write_parquet)
 
     child_code = """
 import sys
@@ -153,7 +160,7 @@ def paused_write(rows, path):
     sys.stdin.readline()
     return path
 
-retention.export_for_drop([{}], table="events", range_key="day", write=paused_write)
+retention.export_for_drop([{"id": 1}], table="events", range_key="day", write=paused_write)
 """
     from concurrent.futures import ThreadPoolExecutor
 
@@ -165,28 +172,28 @@ retention.export_for_drop([{}], table="events", range_key="day", write=paused_wr
         try:
             assert reader.submit(child.stdout.readline).result(timeout=10) == "locked\n"
             calls = []
-            assert export_for_drop([{}], **key, write=lambda *args: calls.append(args)) is None
+            assert export_for_drop([{"id": 1}], **key, write=lambda *args: calls.append(args)) is None
             assert drop_after_marker(previous["marker"], delete=calls.append) is None
             assert calls == []
-            other = export_for_drop([{}], table="events", range_key="other",
-                                    write=lambda rows, path: path)
+            other = export_for_drop([{"id": 1}], table="events", range_key="other",
+                                    write=write_parquet)
             assert other["count"] == 1
         finally:
             child.kill()
             child.wait(timeout=10)
 
     assert not Path(previous["marker"]).exists()
-    retry = export_for_drop([{}, {}], **key, write=lambda rows, path: path)
+    retry = export_for_drop([{"id": 1}, {"id": 2}], **key, write=write_parquet)
     assert Path(retry["marker"]).read_text() == "2"
 
 
 def test_export_records_submitted_count_when_writer_consumes_batch(tmp_path, monkeypatch):
-    from pathlib import Path
 
     monkeypatch.setattr(retention, "LAKE_ROOT", tmp_path)
     written = []
 
     def write(rows, path):
+        write_parquet(rows, path)
         written.extend(rows)
         rows.clear()
         return path
@@ -203,9 +210,7 @@ def test_export_records_submitted_count_when_writer_consumes_batch(tmp_path, mon
 
 
 def test_retention_marker_matches_rows_read_back_from_parquet(tmp_path, monkeypatch):
-    from pathlib import Path
 
-    import polars as pl
 
     monkeypatch.setattr(retention, "LAKE_ROOT", tmp_path)
     rows = [{"id": 10}, {"id": 20}, {"id": 30}]
@@ -224,3 +229,30 @@ def test_retention_marker_matches_rows_read_back_from_parquet(tmp_path, monkeypa
     counts = []
     assert drop_after_marker(result["marker"], delete=counts.append) == len(restored)
     assert counts == [len(restored)]
+
+
+def test_short_export_does_not_authorize_drop(tmp_path, monkeypatch):
+
+    monkeypatch.setattr(retention, "LAKE_ROOT", tmp_path)
+
+    def write_short(rows, destination):
+        Path(destination).parent.mkdir(parents=True, exist_ok=True)
+        pl.DataFrame(rows[:1]).write_parquet(destination)
+        return destination
+
+    result = export_for_drop([{"id": 1}, {"id": 2}], table="events",
+                             range_key="day", write=write_short)
+    assert result is None
+    assert not (tmp_path / "_markers" / "events-day.ok").exists()
+
+
+def test_success_without_new_file_cannot_reapprove_previous_export(tmp_path, monkeypatch):
+    monkeypatch.setattr(retention, "LAKE_ROOT", tmp_path)
+    key = {"table": "events", "range_key": "day"}
+    previous = export_for_drop([{"id": 1}], **key, write=write_parquet)
+
+    result = export_for_drop([{"id": 2}], **key, write=lambda rows, path: path)
+
+    assert result is None
+    assert not Path(previous["marker"]).exists()
+    assert pl.read_parquet(previous["parquet"]).to_dicts() == [{"id": 1}]

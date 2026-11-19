@@ -5,6 +5,8 @@ from contextlib import closing, contextmanager
 from pathlib import Path
 from uuid import uuid4
 
+import polars as pl
+
 LAKE_ROOT = Path("data/lake")
 
 
@@ -21,15 +23,25 @@ def _range_lock(marker):
 def export_for_drop(rows: list[dict], *, table: str, range_key: str, write) -> dict | None:
     """Revoke prior approval for this range, export, then publish its row count."""
     marker = LAKE_ROOT / "_markers" / f"{table}-{range_key}.ok"
-    parquet = str(LAKE_ROOT / table / f"{range_key}.parquet")
+    parquet = LAKE_ROOT / table / f"{range_key}.parquet"
     if not rows and not marker.exists():
         return None
     try:
         with _range_lock(marker):
             marker.unlink(missing_ok=True)
             count = len(rows)
-            if not count or write(rows, parquet) is None:
+            if not count:
                 return None
+            parquet.parent.mkdir(parents=True, exist_ok=True)
+            staged = parquet.with_suffix(f".{uuid4().hex}.tmp")
+            try:
+                if write(rows, str(staged)) is None:
+                    return None
+                if pl.read_parquet(staged, glob=False).height != count:
+                    return None
+                staged.replace(parquet)
+            finally:
+                staged.unlink(missing_ok=True)
             pending = marker.with_suffix(f".{uuid4().hex}.tmp")
             try:
                 pending.write_text(str(count))
@@ -38,7 +50,7 @@ def export_for_drop(rows: list[dict], *, table: str, range_key: str, write) -> d
                 pending.unlink(missing_ok=True)
     except Exception:
         return None
-    return {"marker": str(marker), "count": count, "parquet": parquet}
+    return {"marker": str(marker), "count": count, "parquet": str(parquet)}
 
 
 def drop_after_marker(marker, *, delete) -> int | None:

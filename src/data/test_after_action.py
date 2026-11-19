@@ -213,3 +213,41 @@ def test_configured_upload_without_minio_client_keeps_local_export(tmp_path, mon
     assert result["uploaded"] is False
     assert Path(result["manifest"]).is_file()
     assert all(Path(path).is_file() for path in result["files"].values())
+
+
+@pytest.mark.parametrize("code, expected", [
+    ("BucketAlreadyOwnedByYou", "uploaded"),
+    ("BucketAlreadyExists", "failed"),
+    ("AccessDenied", "failed"),
+])
+def test_bucket_creation_conflict(tmp_path, monkeypatch, code, expected):
+    import sys
+    from types import SimpleNamespace
+
+    class S3Error(Exception):
+        def __init__(self, error_code):
+            super().__init__(error_code)
+            self.code = error_code
+
+    keys = []
+
+    class Client:
+        def bucket_exists(self, bucket):
+            return False
+
+        def make_bucket(self, bucket):
+            raise S3Error(code)
+
+        def fput_object(self, bucket, key, path):
+            keys.append(key)
+
+    monkeypatch.setenv("MINIO_ENDPOINT", "archive.test")
+    monkeypatch.setitem(sys.modules, "minio", SimpleNamespace(Minio=lambda *a, **kw: Client()))
+    monkeypatch.setitem(sys.modules, "minio.error", SimpleNamespace(S3Error=S3Error))
+    result = write_after_action("archive", [], tmp_path)
+    assert result["upload_status"] == expected
+    assert Path(result["manifest"]).is_file()
+    if expected == "uploaded":
+        assert keys[-1] == "archive/manifest.json"
+    else:
+        assert keys == []

@@ -198,7 +198,14 @@ def _upload(files: dict[str, str], mission_id: str, manifest: Path, relative: Pa
     )
     bucket = os.environ.get("MINIO_BUCKET", "cnc-after-action")
     if not client.bucket_exists(bucket):
-        client.make_bucket(bucket)
+        from minio.error import S3Error
+
+        try:
+            client.make_bucket(bucket)
+        except S3Error as exc:
+            # Another exporter can create our bucket after the existence check.
+            if exc.code != "BucketAlreadyOwnedByYou":
+                raise
     for path in sorted(files.values()):
         name = Path(path).name
         client.fput_object(bucket, f"{mission_id}/{relative.as_posix()}/{name}", path)

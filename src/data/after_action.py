@@ -231,7 +231,13 @@ def write_after_action(
     published.parent.mkdir(exist_ok=True)
     entries = {name: (relative / f"{name}.parquet").as_posix() for name in TABLES}
     files = {name: str(dest / entry) for name, entry in entries.items()}
-    manifest = {"version": 1, "generation": generation, "mission_id": mission_id, "files": entries}
+    manifest = {
+        "version": 1,
+        "generation": generation,
+        "mission_id": mission_id,
+        "files": entries,
+        "row_counts": {name: len(collected[name]) for name in TABLES},
+    }
     with TemporaryDirectory(dir=dest, prefix=".export-") as temporary:
         staging = Path(temporary)
         archive = staging / "archive"

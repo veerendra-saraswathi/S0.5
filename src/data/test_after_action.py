@@ -36,6 +36,9 @@ def test_export_writes_one_parquet_per_table(tmp_path, monkeypatch):
     assert result["uploaded"] is False
     assert set(result["files"]) == {"telemetry", "commands", "events", "alerts"}
 
+    manifest = json.loads(Path(result["manifest"]).read_text())
+    assert manifest["row_counts"] == {"telemetry": 1, "commands": 1, "events": 1, "alerts": 1}
+
     telemetry = pl.read_parquet(result["files"]["telemetry"])
     commands = pl.read_parquet(result["files"]["commands"])
     events = pl.read_parquet(result["files"]["events"])
@@ -60,6 +63,8 @@ def test_export_writes_one_parquet_per_table(tmp_path, monkeypatch):
 def test_export_writes_an_empty_schema(tmp_path):
     mission_id = f"empty-{uuid4()}"
     result = write_after_action(mission_id, [f"nobody-{uuid4()}"], tmp_path / mission_id)
+    manifest = json.loads(Path(result["manifest"]).read_text())
+    assert manifest["row_counts"] == {"telemetry": 0, "commands": 0, "events": 0, "alerts": 0}
     for name in ("telemetry", "commands", "events", "alerts"):
         frame = pl.read_parquet(result["files"][name])
         assert frame.height == 0
